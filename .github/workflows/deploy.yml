@@ -28,7 +28,8 @@ jobs:
       - run: |
           mkdir _site
           cp index.html style.css script.js _site/
-          curl -L --fail --retry 3 "https://t-mobilitat.cat/opendata/static/download/" -o _site/gtfs.zip
+          curl -L --fail --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://t-mobilitat.cat/opendata/static/download/" -o _site/gtfs.zip
+          unzip -t _site/gtfs.zip
 
       - uses: actions/configure-pages@v5
 
