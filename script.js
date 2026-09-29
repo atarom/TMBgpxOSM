@@ -23,7 +23,10 @@ const GTFS_URL = "./gtfs.zip",
     if (text !== undefined) e.textContent = text;
     return e;
   };
-setLoading("Carregant el GTFS oficial","Carregant la còpia sincronitzada amb T-mobilitat…");
+const setLoading = (title, detail) => {
+    $("loading-title").textContent = title;
+    $("loading-detail").textContent = detail;
+  },
   indexes = (h) => Object.fromEntries(h.map((v, i) => [v, i])),
   bump = (m, v) => m.set(v, (m.get(v) || 0) + 1),
   mostCommon = (m) => {
@@ -154,10 +157,7 @@ const compareRoutes = (a, b) => {
   );
 };
 const loadGtfs = async () => {
-  setLoading(
-    "Descarregant el GTFS oficial",
-    "Rebent el fitxer des de T-mobilitat…"
-  );
+  setLoading("Carregant el GTFS oficial","Carregant la còpia sincronitzada amb T-mobilitat…");
   const response = await fetch(GTFS_URL);
   if (!response.ok)
     throw new Error(`No s’ha pogut descarregar el GTFS (HTTP ${response.status})`);
