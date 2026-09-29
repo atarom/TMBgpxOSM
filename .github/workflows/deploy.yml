@@ -1,5 +1,4 @@
 name: Deploy TMBgpxOSM
-
 on:
   push:
     branches:
@@ -7,43 +6,34 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 3 * * *"
-
 permissions:
   contents: read
   actions: read
   pages: write
   id-token: write
-
 concurrency:
   group: pages
   cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v6
-
       - run: |
           mkdir _site
-          cp index.html style.css script.js _site/
+          cp index.html style.css script.js osm-qa.js _site/
           curl -L --fail --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://t-mobilitat.cat/opendata/static/download/" -o _site/gtfs.zip
           unzip -t _site/gtfs.zip
-
       - uses: actions/configure-pages@v5
-
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
-
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
-
     steps:
       - name: Deploy
         id: deployment
