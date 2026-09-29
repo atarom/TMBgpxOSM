@@ -17,19 +17,45 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.gtfs.outputs.should_deploy }}
     steps:
       - uses: actions/checkout@v6
-      - run: |
+      - id: gtfs
+        run: |
           mkdir _site
           cp index.html style.css script.js osm-qa.js gtfs-cache.js favicon.ico _site/
           curl -L --fail --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://t-mobilitat.cat/opendata/static/download/" -o _site/gtfs.zip
           unzip -t _site/gtfs.zip
-          sha256sum _site/gtfs.zip | cut -d ' ' -f1 > _site/gtfs-version.txt
+
+          rm -rf _gtfs_hash
+          mkdir _gtfs_hash
+          unzip -qq _site/gtfs.zip -d _gtfs_hash
+          NEW_HASH=$(find _gtfs_hash -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d ' ' -f1)
+          printf '%s\n' "$NEW_HASH" > _site/gtfs-version.txt
+
+          SHOULD_DEPLOY=true
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            OLD_HASH=$(curl -fsSL -H "Cache-Control: no-cache" "https://atarom.github.io/TMBgpxOSM/gtfs-version.txt?run=${GITHUB_RUN_ID}" || true)
+
+            if [ "$NEW_HASH" = "$OLD_HASH" ]; then
+              SHOULD_DEPLOY=false
+            fi
+          fi
+
+          echo "should_deploy=$SHOULD_DEPLOY" >> "$GITHUB_OUTPUT"
+
       - uses: actions/configure-pages@v5
+        if: steps.gtfs.outputs.should_deploy == 'true'
+
       - uses: actions/upload-pages-artifact@v4
+        if: steps.gtfs.outputs.should_deploy == 'true'
         with:
           path: _site
+
   deploy:
+    if: needs.build.outputs.should_deploy == 'true'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
