@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ca">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#e30613" />
+    <meta
+      name="description"
+      content="Converteix recorreguts i parades oficials d’autobús TMB a GPX."
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/ol@10.10.0/ol.css"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <title>TMB Recorreguts GPX</title>
+  </head>
+
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <div class="brand">
+          <span class="brand-box">TMB</span>
+          <span class="brand-title">Recorreguts GPX</span>
+        </div>
+
+        <div class="header-meta">
+          <span>BUS</span>
+          <span>BARCELONA</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section id="loading" class="loading" aria-live="polite">
+        <div class="loading-mark"></div>
+
+        <div>
+          <span class="eyebrow">Actualitzant informació</span>
+          <h2 id="loading-title">Descarregant el GTFS oficial</h2>
+          <p id="loading-detail">Connectant amb T-mobilitat…</p>
+        </div>
+      </section>
+
+      <section id="error-view" class="error-view" hidden>
+        <span class="eyebrow">No s’ha pogut carregar el GTFS</span>
+        <h2 id="error-message"></h2>
+        <button id="retry" type="button">Torna-ho a provar</button>
+      </section>
+
+      <div id="application" class="app-grid" hidden>
+        <aside class="selector" aria-labelledby="selector-title">
+          <div class="section-head">
+            <h2 id="selector-title">Línia de bus</h2>
+          </div>
+
+          <div class="search-row">
+            <input
+              id="line-search"
+              type="search"
+              autocomplete="off"
+              aria-label="Número o destinació"
+              placeholder="Cercar línia"
+            />
+            <span id="line-count" aria-live="polite"></span>
+          </div>
+
+          <div
+            id="line-list"
+            class="line-list"
+            role="listbox"
+            aria-label="Línies TMB"
+          ></div>
+
+          <p id="empty" class="empty" hidden>
+            No hi ha línies que coincideixin.
+          </p>
+        </aside>
+
+        <section id="results" class="results" aria-live="polite">
+          <div id="placeholder" class="placeholder">
+            <h2>Selecciona una línia</h2>
+            <div class="placeholder-line"></div>
+          </div>
+
+          <div id="route-view" hidden>
+            <div class="route-head">
+              <div class="route-title">
+                <span id="selected-badge" class="route-badge"></span>
+
+                <div>
+                  <h2 id="selected-name"></h2>
+                </div>
+              </div>
+
+              <div class="route-tools">
+                <button
+                  id="qa-errors-toggle"
+                  type="button"
+                  aria-pressed="true"
+                  hidden
+                >
+                  Errors: ON
+                </button>
+
+                <button id="download-all" type="button">
+                  Descarregar-los tots
+                </button>
+              </div>
+            </div>
+
+            <div class="map-block">
+              <div id="map" aria-label="Mapa del recorregut seleccionat"></div>
+
+              <div id="map-popup" class="map-popup" hidden></div>
+            </div>
+
+            <div id="shape-list" class="shape-list"></div>
+          </div>
+        </section>
+      </div>
+
+      <footer>
+        <span id="dataset-date"></span>
+        <span>Geometries i parades oficials GTFS</span>
+      </footer>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/ol@10.10.0/dist/ol.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>
