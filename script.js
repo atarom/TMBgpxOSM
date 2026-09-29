@@ -23,10 +23,7 @@ const GTFS_URL = "./gtfs.zip",
     if (text !== undefined) e.textContent = text;
     return e;
   };
-const setLoading = (title, detail) => {
-    $("loading-title").textContent = title;
-    $("loading-detail").textContent = detail;
-  },
+setLoading("Carregant el GTFS oficial","Carregant la còpia sincronitzada amb T-mobilitat…");
   indexes = (h) => Object.fromEntries(h.map((v, i) => [v, i])),
   bump = (m, v) => m.set(v, (m.get(v) || 0) + 1),
   mostCommon = (m) => {
