@@ -1,4 +1,4 @@
-const const GTFS_URL = "./gtfs.zip",
+const GTFS_URL = "./gtfs.zip",
   OVERPASS_URL = "https://overpass-api.de/api/interpreter",
   OSM_API_URL = "https://www.openstreetmap.org/api/0.6/relation",
   OSM_OPERATOR = "Transports Metropolitans de Barcelona",
