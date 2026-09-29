@@ -14,7 +14,7 @@
 
 ---
 
-Consulta les línies i sentits de TMB, visualitza recorreguts i parades, descarrega fitxers GPX i compara el GTFS oficial amb les relacions d’OpenStreetMap per detectar diferències de geometria, parades i etiquetatge.
+Consulta les línies i sentits de TMB, visualitza recorreguts i parades, descarrega fitxers GPX per poder seguir i recórrer els itineraris sobre el terreny, i compara el GTFS oficial amb les relacions d’OpenStreetMap per detectar diferències de geometria, parades i etiquetatge.
 
 ## Tecnologies i dades
 
