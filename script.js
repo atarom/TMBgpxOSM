@@ -281,17 +281,100 @@ const serviceTodayKey = () => {
       (serviceId) => meta.tripsByService.get(serviceId) || []
     );
   },
-  chooseRepresentativeTrip = (meta, stopCounts) => {
-    let candidate = "",
-      bestCount = -1;
-    for (const tripId of meta.candidateTrips || []) {
-      const count = stopCounts.get(tripId) || 0;
-      if (count > bestCount) {
-        candidate = tripId;
-        bestCount = count;
-      }
+  analyzeTripPatterns = (meta, tripStats, stopMap) => {
+    const trips = (meta.candidateTrips || [])
+      .map((tripId) => ({ tripId, ...(tripStats.get(tripId) || {}) }))
+      .filter((trip) => trip.count);
+    if (!trips.length)
+      return {
+        representativeTrip: meta.candidateTrips?.[0] || "",
+        patterns: []
+      };
+    const withSequence = trips.filter(
+        (trip) => finite(trip.firstSequence) && finite(trip.lastSequence)
+      ),
+      routeFirstSequence = withSequence.length
+        ? Math.min(...withSequence.map((trip) => trip.firstSequence))
+        : null,
+      routeLastSequence = withSequence.length
+        ? Math.max(...withSequence.map((trip) => trip.lastSequence))
+        : null,
+      groups = new Map();
+    for (const trip of trips) {
+      const key = [
+        trip.firstSequence ?? "",
+        trip.lastSequence ?? "",
+        trip.count,
+        trip.firstStopId || "",
+        trip.lastStopId || ""
+      ].join("|");
+      if (!groups.has(key))
+        groups.set(key, {
+          firstSequence: trip.firstSequence,
+          lastSequence: trip.lastSequence,
+          stopCount: trip.count,
+          firstStopId: trip.firstStopId || "",
+          lastStopId: trip.lastStopId || "",
+          tripIds: []
+        });
+      groups.get(key).tripIds.push(trip.tripId);
     }
-    return candidate || meta.candidateTrips?.[0] || "";
+    const patterns = [...groups.values()].map((pattern) => {
+      const hasSequence =
+          finite(pattern.firstSequence) && finite(pattern.lastSequence),
+        beginsRoute =
+          hasSequence && pattern.firstSequence === routeFirstSequence,
+        endsRoute = hasSequence && pattern.lastSequence === routeLastSequence;
+      let kind = "unknown";
+      if (beginsRoute && endsRoute) kind = "full";
+      else if (beginsRoute) kind = "partial-start";
+      else if (endsRoute) kind = "partial-end";
+      else if (hasSequence) kind = "partial";
+      return {
+        ...pattern,
+        kind,
+        tripCount: pattern.tripIds.length,
+        firstStopName: stopMap.get(pattern.firstStopId)?.name || "",
+        lastStopName: stopMap.get(pattern.lastStopId)?.name || "",
+        sequenceSpan: hasSequence
+          ? pattern.lastSequence - pattern.firstSequence
+          : -1
+      };
+    });
+    const kindOrder = {
+      full: 0,
+      "partial-start": 1,
+      "partial-end": 2,
+      partial: 3,
+      unknown: 4
+    };
+    patterns.sort(
+      (a, b) =>
+        kindOrder[a.kind] - kindOrder[b.kind] ||
+        b.tripCount - a.tripCount ||
+        b.sequenceSpan - a.sequenceSpan ||
+        b.stopCount - a.stopCount
+    );
+    const full = patterns.filter((pattern) => pattern.kind === "full"),
+      representativePattern =
+        full.sort(
+          (a, b) =>
+            b.tripCount - a.tripCount ||
+            b.stopCount - a.stopCount ||
+            b.sequenceSpan - a.sequenceSpan
+        )[0] ||
+        [...patterns].sort(
+          (a, b) =>
+            b.sequenceSpan - a.sequenceSpan ||
+            b.stopCount - a.stopCount ||
+            b.tripCount - a.tripCount
+        )[0];
+    return {
+      representativeTrip: representativePattern?.tripIds[0] || trips[0].tripId,
+      patterns,
+      routeFirstSequence,
+      routeLastSequence
+    };
   };
 const streamCalendarDates = (file, serviceIds, serviceDates) =>
   new Promise((resolve, reject) => {
@@ -479,23 +562,50 @@ const loadGtfs = async () => {
       shapeMeta.get(id).shapeDistance = Math.max(shapeMeta.get(id).shapeDistance, distance);
   });
   const candidateTrips = new Set(),
-    stopCounts = new Map();
+    tripStats = new Map();
   for (const m of shapeMeta.values())
     for (const tripId of m.candidateTrips) candidateTrips.add(tripId);
   setLoading(
-    "Triant els viatges representatius",
-    "Comptant parades de stop_times.txt…"
+    "Analitzant els patrons de servei",
+    "Identificant l’inici i el final dels viatges…"
   );
   idx = null;
   await streamCsv(zip.file("stop_times.txt"), (r, h) => {
     idx ||= indexes(h);
     const tripId = r[idx.trip_id];
     if (!candidateTrips.has(tripId)) return;
-    stopCounts.set(tripId, (stopCounts.get(tripId) || 0) + 1);
+    const sequence = Number(r[idx.stop_sequence]),
+      stopId = r[idx.stop_id];
+    if (!tripStats.has(tripId))
+      tripStats.set(tripId, {
+        count: 0,
+        firstSequence: Infinity,
+        lastSequence: -Infinity,
+        firstStopId: "",
+        lastStopId: ""
+      });
+    const stat = tripStats.get(tripId);
+    stat.count++;
+    if (finite(sequence) && sequence < stat.firstSequence) {
+      stat.firstSequence = sequence;
+      stat.firstStopId = stopId;
+    }
+    if (finite(sequence) && sequence > stat.lastSequence) {
+      stat.lastSequence = sequence;
+      stat.lastStopId = stopId;
+    }
+    if (!finite(sequence)) {
+      if (!stat.firstStopId) stat.firstStopId = stopId;
+      stat.lastStopId = stopId;
+    }
   });
   const representativeTrips = new Set();
   for (const m of shapeMeta.values()) {
-    m.representativeTrip = chooseRepresentativeTrip(m, stopCounts);
+    const analysis = analyzeTripPatterns(m, tripStats, stopMap);
+    m.representativeTrip = analysis.representativeTrip;
+    m.tripPatterns = analysis.patterns;
+    m.routeFirstSequence = analysis.routeFirstSequence;
+    m.routeLastSequence = analysis.routeLastSequence;
     if (!m.representativeTrip) continue;
     representativeTrips.add(m.representativeTrip);
     tripStops.set(m.representativeTrip, []);
@@ -541,6 +651,9 @@ const loadGtfs = async () => {
       points,
       distance: m.shapeDistance,
       representativeTrip: m.representativeTrip,
+      tripPatterns: m.tripPatterns || [],
+      routeFirstSequence: m.routeFirstSequence,
+      routeLastSequence: m.routeLastSequence,
       serviceIds: [...m.serviceIds],
       tripRaw: tripRaw.get(m.representativeTrip) || null,
       stops: (tripStops.get(m.representativeTrip) || [])
@@ -722,6 +835,31 @@ const bikesText = (value) =>
   ({ "0": "Sense informació", "1": "Permeses", "2": "No permeses" })[
     String(value)
   ] || `Codi ${infoValue(value)}`;
+const tripPatternKindText = (kind) =>
+  ({
+    full: "Principal",
+    "partial-start": "Parcial inicial",
+    "partial-end": "Parcial final",
+    partial: "Parcial intermedi",
+    unknown: "Patró"
+  })[kind] || "Patró";
+const tripPatternRows = (shape) =>
+  (shape.tripPatterns || []).map((pattern) => {
+    const range =
+        finite(pattern.firstSequence) && finite(pattern.lastSequence)
+          ? `${pattern.firstSequence}–${pattern.lastSequence}`
+          : "seq. desconeguda",
+      stops = `${pattern.stopCount} ${pattern.stopCount === 1 ? "parada" : "parades"}`,
+      trips = `${pattern.tripCount} ${pattern.tripCount === 1 ? "viatge" : "viatges"}`,
+      endpoints =
+        pattern.firstStopName || pattern.lastStopName
+          ? `${pattern.firstStopName || pattern.firstStopId || "—"} → ${pattern.lastStopName || pattern.lastStopId || "—"}`
+          : "";
+    return [
+      `${tripPatternKindText(pattern.kind)} · ${trips}`,
+      `${range} · ${stops}${endpoints ? ` · ${endpoints}` : ""}`
+    ];
+  });
 const setInfoPanelOpen = (open) => {
   const panel = $("info-panel"),
     toggle = $("info-panel-toggle");
@@ -792,12 +930,16 @@ const showShapeInfo = (route, shape, openMobile = true) => {
     head = panelHeader("Recorregut", shape.label, statusText(shape)),
     summary = createInfoSection("Servei", [
       ["Dates", calendarSummary(shape.serviceDates)],
-      ["Parades", shape.stops.length],
+      ["Parades del patró principal", shape.stops.length],
       ["Longitud aproximada", `${polylineDistanceKm(shape.points).toFixed(1)} km`],
       ["Direcció GTFS", shape.direction],
       ["shape_id", shape.id],
       ["trip_id de mostra", shape.representativeTrip]
     ]),
+    patternRows = tripPatternRows(shape),
+    patterns = patternRows.length
+      ? createInfoSection("Patrons de viatge", patternRows)
+      : null,
     stops = el("details", "info-stop-list"),
     stopSummary = el("summary", "", `Parades (${shape.stops.length})`),
     stopButtons = el("div", "info-stop-buttons");
@@ -828,7 +970,14 @@ const showShapeInfo = (route, shape, openMobile = true) => {
   ]
     .filter(Boolean)
     .forEach((node) => technical.append(node));
-  content.replaceChildren(back, head, summary, stops, technical);
+  content.replaceChildren(
+    back,
+    head,
+    summary,
+    ...(patterns ? [patterns] : []),
+    stops,
+    technical
+  );
   $("info-panel-caption").textContent = shape.label;
   panel.hidden = false;
   setInfoPanelOpen(openMobile);
