@@ -1075,11 +1075,6 @@ window.runOsmQa = async (route, shape, button, status) => {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const geometry = compareRouteGeometry(shape, parsed),
       stops = compareStops(shape, parsed);
-    shape.osmQa = {
-      relationId: relation.id,
-      lengths: geometry.lengths,
-      match: geometry.match
-    };
     drawGeometryErrors(shape, geometry);
     drawStopErrors(shape, stops);
     revealQaErrorsToggle();

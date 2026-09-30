@@ -133,9 +133,7 @@ const serviceTodayKey = () => {
 			dates: sorted,
 			status: active ? "active" : nextDate ? "future" : lastDate ? "past" : "unknown",
 			nextDate,
-			lastDate,
-			firstDate: sorted[0] || "",
-			finalDate: sorted.at(-1) || ""
+			lastDate
 		};
 	},
 	candidateTripsForSchedule = (meta, serviceDates, today, status) => {
@@ -175,63 +173,84 @@ const serviceTodayKey = () => {
 	analyzeTripPatterns = (meta, tripStats, stopMap) => {
 		const trips = (meta.candidateTrips || [])
 			.map((tripId) => ({ tripId, ...(tripStats.get(tripId) || {}) }))
-			.filter((trip) => trip.count);
+			.filter((trip) => trip.stops?.length);
 		if (!trips.length)
 			return {
 				representativeTrip: meta.candidateTrips?.[0] || "",
 				patterns: []
 			};
-		const withSequence = trips.filter(
-				(trip) => finite(trip.firstSequence) && finite(trip.lastSequence)
-			),
-			routeFirstSequence = withSequence.length
-				? Math.min(...withSequence.map((trip) => trip.firstSequence))
-				: null,
-			routeLastSequence = withSequence.length
-				? Math.max(...withSequence.map((trip) => trip.lastSequence))
-				: null,
+		const orderedStops = (trip) =>
+			[...trip.stops]
+				.sort((a, b) => {
+					const as = finite(a[0]), bs = finite(b[0]);
+					if (as && bs) return a[0] - b[0] || a[1] - b[1];
+					if (as) return -1;
+					if (bs) return 1;
+					return a[1] - b[1];
+				})
+				.map((stop) => stop[2]),
 			groups = new Map();
 		for (const trip of trips) {
-			const key = [
-				trip.firstSequence ?? "",
-				trip.lastSequence ?? "",
-				trip.count,
-				trip.firstStopId || "",
-				trip.lastStopId || ""
-			].join("|");
+			const stopIds = orderedStops(trip),
+				key = stopIds.join("\u001f");
 			if (!groups.has(key))
 				groups.set(key, {
-					firstSequence: trip.firstSequence,
-					lastSequence: trip.lastSequence,
-					stopCount: trip.count,
-					firstStopId: trip.firstStopId || "",
-					lastStopId: trip.lastStopId || "",
-					tripIds: []
+					stopIds,
+					stopCount: stopIds.length,
+					firstStopId: stopIds[0] || "",
+					lastStopId: stopIds.at(-1) || "",
+					tripIds: [],
+					sequenceRanges: new Set()
 				});
-			groups.get(key).tripIds.push(trip.tripId);
+			const group = groups.get(key);
+			group.tripIds.push(trip.tripId);
+			if (finite(trip.firstSequence) && finite(trip.lastSequence))
+				group.sequenceRanges.add(`${trip.firstSequence}|${trip.lastSequence}`);
 		}
 		const patterns = [...groups.values()].map((pattern) => {
-			const hasSequence =
-					finite(pattern.firstSequence) && finite(pattern.lastSequence),
-				beginsRoute =
-					hasSequence && pattern.firstSequence === routeFirstSequence,
-				endsRoute = hasSequence && pattern.lastSequence === routeLastSequence;
-			let kind = "unknown";
-			if (beginsRoute && endsRoute) kind = "full";
-			else if (beginsRoute) kind = "partial-start";
-			else if (endsRoute) kind = "partial-end";
-			else if (hasSequence) kind = "partial";
+			let firstSequence = null, lastSequence = null;
+			if (pattern.sequenceRanges.size === 1)
+				[firstSequence, lastSequence] = [...pattern.sequenceRanges][0]
+					.split("|")
+					.map(Number);
 			return {
 				...pattern,
-				kind,
+				firstSequence,
+				lastSequence,
 				tripCount: pattern.tripIds.length,
 				firstStopName: stopMap.get(pattern.firstStopId)?.name || "",
-				lastStopName: stopMap.get(pattern.lastStopId)?.name || "",
-				sequenceSpan: hasSequence
-					? pattern.lastSequence - pattern.firstSequence
-					: -1
+				lastStopName: stopMap.get(pattern.lastStopId)?.name || ""
 			};
-		});
+		}),
+			representativePattern = [...patterns].sort(
+				(a, b) => b.stopCount - a.stopCount || b.tripCount - a.tripCount
+			)[0],
+			mainStops = representativePattern.stopIds,
+			findContiguous = (part) => {
+				if (!part.length || part.length > mainStops.length) return -1;
+				for (let start = 0; start <= mainStops.length - part.length; start++) {
+					let match = true;
+					for (let i = 0; i < part.length; i++)
+						if (mainStops[start + i] !== part[i]) {
+							match = false;
+							break;
+						}
+					if (match) return start;
+				}
+				return -1;
+			};
+		for (const pattern of patterns) {
+			if (pattern === representativePattern) pattern.kind = "full";
+			else {
+				const startIndex = findContiguous(pattern.stopIds);
+				if (startIndex === 0) pattern.kind = "partial-start";
+				else if (startIndex === mainStops.length - pattern.stopCount) pattern.kind = "partial-end";
+				else if (startIndex >= 0) pattern.kind = "partial";
+				else pattern.kind = "unknown";
+			}
+			delete pattern.stopIds;
+			delete pattern.sequenceRanges;
+		}
 		const kindOrder = {
 			full: 0,
 			"partial-start": 1,
@@ -243,25 +262,10 @@ const serviceTodayKey = () => {
 			(a, b) =>
 				kindOrder[a.kind] - kindOrder[b.kind] ||
 				b.tripCount - a.tripCount ||
-				b.sequenceSpan - a.sequenceSpan ||
 				b.stopCount - a.stopCount
 		);
-		const full = patterns.filter((pattern) => pattern.kind === "full"),
-			representativePattern =
-				full.sort(
-					(a, b) =>
-						b.tripCount - a.tripCount ||
-						b.stopCount - a.stopCount ||
-						b.sequenceSpan - a.sequenceSpan
-				)[0] ||
-				[...patterns].sort(
-					(a, b) =>
-						b.sequenceSpan - a.sequenceSpan ||
-						b.stopCount - a.stopCount ||
-						b.tripCount - a.tripCount
-				)[0];
 		return {
-			representativeTrip: representativePattern?.tripIds[0] || trips[0].tripId,
+			representativeTrip: representativePattern.tripIds[0] || trips[0].tripId,
 			patterns
 		};
 	};
@@ -472,10 +476,12 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 				firstSequence: Infinity,
 				lastSequence: -Infinity,
 				firstStopId: "",
-				lastStopId: ""
+				lastStopId: "",
+				stops: []
 			});
-		const stat = tripStats.get(tripId);
-		stat.count++;
+		const stat = tripStats.get(tripId),
+			order = stat.count++;
+		stat.stops.push([sequence, order, stopId]);
 		if (finite(sequence) && sequence < stat.firstSequence) {
 			stat.firstSequence = sequence;
 			stat.firstStopId = stopId;
@@ -534,8 +540,6 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 			serviceDates: m.schedule.dates,
 			nextDate: m.schedule.nextDate,
 			lastDate: m.schedule.lastDate,
-			firstDate: m.schedule.firstDate,
-			finalDate: m.schedule.finalDate,
 			points,
 			distance: m.shapeDistance,
 			representativeTrip: m.representativeTrip,
@@ -587,7 +591,7 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 			return { ...route, shapes };
 		})
 		.sort(compareRoutes);
-	return { routes, agency, feed, modified: response.headers.get("Last-Modified") };
+	return { routes, agency, feed, version: window.TmbGtfsVersion || "" };
 };
 	window.TmbGtfs = { load, formatDateKey, dateRanges, formatDateRange, calendarSummary };
 })();

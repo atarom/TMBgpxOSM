@@ -1082,7 +1082,10 @@ const startApplication = async () => {
 		state.routes = gtfs.routes;
 		state.gtfsAgency = gtfs.agency;
 		state.gtfsFeed = gtfs.feed;
-		$("dataset-date").textContent = `GTFS oficial · ${(gtfs.modified ? new Date(gtfs.modified) : new Date()).toLocaleDateString("ca-ES")}`;
+		const version = (gtfs.feed?.feed_version || gtfs.version || "").trim();
+		$("dataset-date").textContent = version
+			? `GTFS oficial · versió ${version.slice(0, 12)}`
+			: "GTFS oficial";
 		$("loading").hidden = true;
 		$("application").hidden = false;
 		renderRoutes();
@@ -1098,9 +1101,10 @@ const startApplication = async () => {
 };
 $("line-search").addEventListener("input", (e) => renderRoutes(e.target.value));
 $("download-all").addEventListener("click", () => {
-	const shapes = state.selected?.shapes.filter(visible) || [];
+	const route = state.selected,
+		shapes = route?.shapes.filter(visible) || [];
 	shapes.forEach((shape, index) =>
-		setTimeout(() => window.TmbGpx.download(state.selected, shape), index * 250)
+		setTimeout(() => window.TmbGpx.download(route, shape), index * 250)
 	);
 });
 $("qa-errors-toggle").addEventListener("click", () =>
