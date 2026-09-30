@@ -247,30 +247,51 @@ const serviceTodayKey = () => {
       finalDate: sorted.at(-1) || ""
     };
   },
-  chooseRepresentativeTrip = (meta, serviceDates, today, status) => {
-    let candidate = "",
-      candidateDate = "";
-    for (const [serviceId, tripId] of meta.tripByService) {
-      const dates = [...(serviceDates.get(serviceId) || [])].sort();
-      if (!dates.length) continue;
-      if (status === "active" && serviceDates.get(serviceId).has(today))
-        return tripId;
-      if (status === "future") {
-        const next = dates.find((date) => date > today);
-        if (next && (!candidateDate || next < candidateDate)) {
-          candidate = tripId;
-          candidateDate = next;
-        }
+  candidateTripsForSchedule = (meta, serviceDates, today, status) => {
+    const serviceCandidates = [];
+    if (status === "active") {
+      for (const serviceId of meta.serviceIds)
+        if (serviceDates.get(serviceId)?.has(today)) serviceCandidates.push(serviceId);
+    } else if (status === "future") {
+      let nearest = "";
+      for (const serviceId of meta.serviceIds) {
+        const next = [...(serviceDates.get(serviceId) || [])]
+          .sort()
+          .find((date) => date > today);
+        if (next && (!nearest || next < nearest)) nearest = next;
       }
-      if (status === "past") {
-        const previous = [...dates].reverse().find((date) => date < today);
-        if (previous && (!candidateDate || previous > candidateDate)) {
-          candidate = tripId;
-          candidateDate = previous;
-        }
+      if (nearest)
+        for (const serviceId of meta.serviceIds)
+          if (serviceDates.get(serviceId)?.has(nearest)) serviceCandidates.push(serviceId);
+    } else if (status === "past") {
+      let nearest = "";
+      for (const serviceId of meta.serviceIds) {
+        const previous = [...(serviceDates.get(serviceId) || [])]
+          .sort()
+          .reverse()
+          .find((date) => date < today);
+        if (previous && (!nearest || previous > nearest)) nearest = previous;
+      }
+      if (nearest)
+        for (const serviceId of meta.serviceIds)
+          if (serviceDates.get(serviceId)?.has(nearest)) serviceCandidates.push(serviceId);
+    }
+    if (!serviceCandidates.length) serviceCandidates.push(...meta.serviceIds);
+    return serviceCandidates.flatMap(
+      (serviceId) => meta.tripsByService.get(serviceId) || []
+    );
+  },
+  chooseRepresentativeTrip = (meta, stopCounts) => {
+    let candidate = "",
+      bestCount = -1;
+    for (const tripId of meta.candidateTrips || []) {
+      const count = stopCounts.get(tripId) || 0;
+      if (count > bestCount) {
+        candidate = tripId;
+        bestCount = count;
       }
     }
-    return candidate || meta.tripByService.values().next().value || "";
+    return candidate || meta.candidateTrips?.[0] || "";
   };
 const streamCalendarDates = (file, serviceIds, serviceDates) =>
   new Promise((resolve, reject) => {
@@ -392,7 +413,8 @@ const loadGtfs = async () => {
         headsigns: new Map(),
         directions: new Map(),
         serviceIds: new Set(),
-        tripByService: new Map(),
+        tripsByService: new Map(),
+        candidateTrips: [],
         representativeTrip: "",
         shapeDistance: 0
       });
@@ -400,7 +422,8 @@ const loadGtfs = async () => {
     bump(m.headsigns, r[idx.trip_headsign] || "Recorregut");
     bump(m.directions, r[idx.direction_id] || "0");
     m.serviceIds.add(serviceId);
-    m.tripByService.set(serviceId, m.tripByService.get(serviceId) || r[idx.trip_id]);
+    if (!m.tripsByService.has(serviceId)) m.tripsByService.set(serviceId, []);
+    m.tripsByService.get(serviceId).push(r[idx.trip_id]);
     serviceIds.add(serviceId);
   });
   for (const serviceId of serviceIds) serviceDates.set(serviceId, new Set());
@@ -429,7 +452,7 @@ const loadGtfs = async () => {
     for (const serviceId of m.serviceIds)
       for (const date of serviceDates.get(serviceId) || []) dates.add(date);
     m.schedule = classifyDates(dates, today);
-    m.representativeTrip = chooseRepresentativeTrip(
+    m.candidateTrips = candidateTripsForSchedule(
       m,
       serviceDates,
       today,
@@ -455,13 +478,29 @@ const loadGtfs = async () => {
     if (finite(distance))
       shapeMeta.get(id).shapeDistance = Math.max(shapeMeta.get(id).shapeDistance, distance);
   });
+  const candidateTrips = new Set(),
+    stopCounts = new Map();
+  for (const m of shapeMeta.values())
+    for (const tripId of m.candidateTrips) candidateTrips.add(tripId);
+  setLoading(
+    "Triant els viatges representatius",
+    "Comptant parades de stop_times.txt…"
+  );
+  idx = null;
+  await streamCsv(zip.file("stop_times.txt"), (r, h) => {
+    idx ||= indexes(h);
+    const tripId = r[idx.trip_id];
+    if (!candidateTrips.has(tripId)) return;
+    stopCounts.set(tripId, (stopCounts.get(tripId) || 0) + 1);
+  });
   const representativeTrips = new Set();
   for (const m of shapeMeta.values()) {
+    m.representativeTrip = chooseRepresentativeTrip(m, stopCounts);
     if (!m.representativeTrip) continue;
     representativeTrips.add(m.representativeTrip);
     tripStops.set(m.representativeTrip, []);
   }
-  setLoading("Assignant les parades", "Processant stop_times.txt");
+  setLoading("Assignant les parades", "Processant stop_times.txt…");
   idx = null;
   await streamCsv(zip.file("stop_times.txt"), (r, h) => {
     idx ||= indexes(h);
