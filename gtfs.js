@@ -466,10 +466,16 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 	idx = null;
 	await streamCsv(zip.file("stop_times.txt"), (r, h) => {
 		idx ||= indexes(h);
-		const tripId = r[idx.trip_id];
+		const tripId = r[idx.trip_id],
+			stopId = r[idx.stop_id],
+			routeId = tripRaw.get(tripId)?.route_id,
+			stop = routeId ? stopMap.get(stopId) : null;
+		if (stop) {
+			stop.routeIds ||= new Set();
+			stop.routeIds.add(routeId);
+		}
 		if (!candidateTrips.has(tripId)) return;
-		const sequence = Number(r[idx.stop_sequence]),
-			stopId = r[idx.stop_id];
+		const sequence = Number(r[idx.stop_sequence]);
 		if (!tripStats.has(tripId))
 			tripStats.set(tripId, {
 				count: 0,
@@ -495,6 +501,11 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 			stat.lastStopId = stopId;
 		}
 	});
+	for (const stop of stopMap.values())
+		if (stop.routeIds)
+			stop.routeIds = [...stop.routeIds].sort((a, b) =>
+				compareRoutes(routeMap.get(a), routeMap.get(b))
+			);
 	const representativeTrips = new Set();
 	for (const m of shapeMeta.values()) {
 		const analysis = analyzeTripPatterns(m, tripStats, stopMap);

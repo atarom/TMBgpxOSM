@@ -334,6 +334,29 @@ const osmActionUrls = (target) => [
 		);
 		return actions;
 	};
+const createStopRoutesSection = (stop, currentRoute) => {
+	const section = el("section", "info-section"),
+		list = el("div", "info-shape-list"),
+		routes = (stop.routeIds || [])
+			.map((id) => state.routes.find((route) => route.id === id))
+			.filter(Boolean);
+	section.append(el("h3", "", "Línies GTFS en aquesta parada"));
+	for (const route of routes) {
+		const button = el("button", "info-shape-button"),
+			name = el("strong", "", route.shortName),
+			meta = el(
+				"span",
+				"",
+				`${route.longName}${route.id === currentRoute.id ? " · línia seleccionada" : ""}`
+			);
+		button.type = "button";
+		button.onclick = () => selectRoute(route);
+		button.append(name, meta);
+		list.append(button);
+	}
+	section.append(list);
+	return section;
+};
 const showStopInfo = (route, shape, stop, openMobile = true) => {
 	if (!route || !shape || !stop) return;
 	const panel = $("info-panel"),
@@ -363,6 +386,7 @@ const showStopInfo = (route, shape, stop, openMobile = true) => {
 			["Longitud", stop.lon],
 			["Accessibilitat parada", accessibilityText(stop.raw?.wheelchair_boarding)]
 		]),
+		lines = createStopRoutesSection(stop, route),
 		tripInfo = createInfoSection("Viatge", [
 			["Línia", `${route.shortName} · ${route.longName}`],
 			["Recorregut", shape.label],
@@ -410,6 +434,7 @@ const showStopInfo = (route, shape, stop, openMobile = true) => {
 		head,
 		summary,
 		location,
+		lines,
 		tripInfo,
 		osmInfo,
 		edit,
