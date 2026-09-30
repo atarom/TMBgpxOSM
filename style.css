@@ -516,17 +516,27 @@ main {
   opacity: 0.75;
 }
 
+.popup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 11px;
+}
 .popup-edit {
   display: inline-flex;
   align-items: center;
-  margin-top: 11px;
+  min-height: 31px;
+  margin: 0;
   padding: 7px 9px;
   border: 1px solid #55555a;
+  border-radius: 0;
   background: #202023;
   color: #fff;
   font-size: 0.68rem;
   font-weight: 800;
+  line-height: 1;
   text-decoration: none;
+  cursor: pointer;
 }
 .popup-edit:hover {
   border-color: #fff;

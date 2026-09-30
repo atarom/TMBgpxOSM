@@ -384,6 +384,11 @@ const evaluateGeometry = (sourceLines, targetLines, project, bufferMeters) => {
   }
   return { percentage: total ? (matched / total) * 100 : 0, errors };
 };
+const lineLengthMeters = (line) => {
+  let total = 0;
+  for (let i = 1; i < line.length; i++) total += geoDistance(line[i - 1], line[i]);
+  return total;
+};
 const compareRouteGeometry = (shape, parsed) => {
   const gtfsLines = [
       shape.points
@@ -405,11 +410,29 @@ const compareRouteGeometry = (shape, parsed) => {
       gtfsLines,
       project,
       DEFAULT_ROUTE_BUFFER_METERS
-    );
+    ),
+    gtfsLengthMeters = gtfsLines.reduce(
+      (total, line) => total + lineLengthMeters(line),
+      0
+    ),
+    osmLengthMeters = osmLines.reduce(
+      (total, line) => total + lineLengthMeters(line),
+      0
+    ),
+    differenceMeters = osmLengthMeters - gtfsLengthMeters,
+    differencePercent = gtfsLengthMeters
+      ? (differenceMeters / gtfsLengthMeters) * 100
+      : 0;
   return {
     gtfsToOsm,
     osmToGtfs,
-    match: Math.min(gtfsToOsm.percentage, osmToGtfs.percentage)
+    match: Math.min(gtfsToOsm.percentage, osmToGtfs.percentage),
+    lengths: {
+      gtfsMeters: gtfsLengthMeters,
+      osmMeters: osmLengthMeters,
+      differenceMeters,
+      differencePercent
+    }
   };
 };
 const drawGeometryErrors = (shape, result) => {
@@ -556,6 +579,11 @@ const osmLogicalPoint = (s) =>
       : null;
 const osmEditTarget = (s) => {
   const candidates = [s.stopPosition, s.platform].filter(Boolean),
+    x = candidates.find((item) => item.type === "node") || candidates[0];
+  return x ? { osmType: x.type, osmId: x.osmId, lat: x.lat, lon: x.lon } : null;
+};
+const osmPopupTarget = (s) => {
+  const candidates = [s.platform, s.stopPosition].filter(Boolean),
     x = candidates.find((item) => item.type === "node") || candidates[0];
   return x ? { osmType: x.type, osmId: x.osmId, lat: x.lat, lon: x.lon } : null;
 };
@@ -784,6 +812,15 @@ const compareStops = (shape, parsed) => {
       specialRestrictions: 0,
       errorCount: 0
     };
+  for (const stop of gtfs)
+    stop.osmQa = {
+      checked: true,
+      exists: false,
+      osmType: "",
+      osmId: "",
+      lat: stop.lat,
+      lon: stop.lon
+    };
   for (const item of alignment) {
     if (item.type === "missing") {
       const g = gtfs[item.gtfsIndex],
@@ -828,7 +865,17 @@ const compareStops = (shape, parsed) => {
     }
     const g = gtfs[item.gtfsIndex],
       o = osm[item.osmIndex],
+      popupTarget = osmPopupTarget(o),
       issues = [];
+    if (popupTarget)
+      g.osmQa = {
+        checked: true,
+        exists: true,
+        osmType: popupTarget.osmType,
+        osmId: popupTarget.osmId,
+        lat: popupTarget.lat,
+        lon: popupTarget.lon
+      };
     let positionTarget = null;
     if (!o.platform) issues.push({ label: "PLATFORM", text: "Falta platform" });
     else {
@@ -959,6 +1006,15 @@ const drawStopErrors = (shape, result) => {
   }
   state.qaErrorLayer?.getSource().addFeatures(features);
 };
+const formatSignedDistance = (meters) => {
+  const absolute = Math.abs(meters),
+    sign = meters > 0.5 ? "+" : meters < -0.5 ? "−" : "";
+  return absolute < 1000
+    ? `${sign}${absolute.toFixed(0)} m`
+    : `${sign}${(absolute / 1000).toFixed(2)} km`;
+};
+const formatSignedPercent = (value) =>
+  `${value > 0.05 ? "+" : value < -0.05 ? "−" : ""}${Math.abs(value).toFixed(1)}%`;
 const renderQaStatus = (status, relationId, warnings, geometry, stops) => {
   status.replaceChildren(el("span", "qa-status-id", `OSM ${relationId}`));
   for (const w of warnings) {
@@ -971,6 +1027,16 @@ const renderQaStatus = (status, relationId, warnings, geometry, stops) => {
     status.append(block);
   }
   status.append(
+    el(
+      "span",
+      "qa-status-line",
+      `Longitud  GTFS ${(geometry.lengths.gtfsMeters / 1000).toFixed(2)} km · OSM ${(geometry.lengths.osmMeters / 1000).toFixed(2)} km`
+    ),
+    el(
+      "span",
+      "qa-status-line",
+      `Diferència OSM−GTFS  ${formatSignedDistance(geometry.lengths.differenceMeters)} · ${formatSignedPercent(geometry.lengths.differencePercent)}`
+    ),
     el(
       "span",
       "qa-status-line",
@@ -1009,6 +1075,11 @@ window.runOsmQa = async (route, shape, button, status) => {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const geometry = compareRouteGeometry(shape, parsed),
       stops = compareStops(shape, parsed);
+    shape.osmQa = {
+      relationId: relation.id,
+      lengths: geometry.lengths,
+      match: geometry.match
+    };
     drawGeometryErrors(shape, geometry);
     drawStopErrors(shape, stops);
     revealQaErrorsToggle();

@@ -82,7 +82,11 @@ const normalizeStopRef = (value) => {
     const target =
       osmType && osmId ? `&${osmType}=${encodeURIComponent(osmId)}` : "";
     return `https://www.openstreetmap.org/edit?editor=id${target}#map=22/${Number(lat).toFixed(7)}/${Number(lon).toFixed(7)}`;
-  };
+  },
+  osmObjectUrl = (osmType, osmId) =>
+    `https://www.openstreetmap.org/${encodeURIComponent(osmType)}/${encodeURIComponent(osmId)}`,
+  osmMapUrl = (lat, lon) =>
+    `https://www.openstreetmap.org/#map=22/${Number(lat).toFixed(7)}/${Number(lon).toFixed(7)}`;
 const copyText = async (value, button) => {
   const text = String(value ?? "");
   try {
@@ -790,6 +794,56 @@ const showShapeInfo = (route, shape, openMobile = true) => {
   panel.hidden = false;
   setInfoPanelOpen(openMobile);
 };
+const osmTargetForStop = (stop) => {
+  const qa = stop?.osmQa,
+    exists = !!(qa?.checked && qa.exists && qa.osmType && qa.osmId);
+  return {
+    checked: !!qa?.checked,
+    exists,
+    osmType: exists ? qa.osmType : "",
+    osmId: exists ? qa.osmId : "",
+    lat: exists && finite(qa.lat) ? qa.lat : stop?.lat,
+    lon: exists && finite(qa.lon) ? qa.lon : stop?.lon
+  };
+};
+const createPopupOsmActions = (target) => {
+  const actions = el("div", "popup-actions"),
+    edit = el(
+      "a",
+      "popup-edit",
+      target.exists ? "Editar en iD" : "Editar zona en iD"
+    ),
+    view = el(
+      "a",
+      "popup-edit",
+      target.exists ? "Veure en OSM" : "Veure zona OSM"
+    ),
+    go = el("button", "popup-edit", "Anar-hi");
+  edit.href = idEditUrl(
+    target.lat,
+    target.lon,
+    target.exists ? target.osmType : "",
+    target.exists ? target.osmId : ""
+  );
+  view.href = target.exists
+    ? osmObjectUrl(target.osmType, target.osmId)
+    : osmMapUrl(target.lat, target.lon);
+  for (const link of [edit, view]) {
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  }
+  go.type = "button";
+  go.onclick = () => {
+    if (!state.map || !finite(target.lat) || !finite(target.lon)) return;
+    state.map.getView().animate({
+      center: ol.proj.fromLonLat([target.lon, target.lat]),
+      zoom: state.map.getView().getMaxZoom(),
+      duration: 300
+    });
+  };
+  actions.append(edit, view, go);
+  return actions;
+};
 const showStopInfo = (route, shape, stop, openMobile = true) => {
   if (!route || !shape || !stop) return;
   state.infoContext = "stop";
@@ -802,6 +856,7 @@ const showStopInfo = (route, shape, stop, openMobile = true) => {
       stop.name
     ),
     trip = shape.tripRaw || {},
+    osmTarget = osmTargetForStop(stop),
     summary = createInfoSection("En aquest recorregut", [
       ["Ordre", stop.sequence],
       ["Arribada", stop.stopTimeRaw?.arrival_time],
@@ -827,13 +882,46 @@ const showStopInfo = (route, shape, stop, openMobile = true) => {
       ["service_id", trip.service_id],
       ["trip_id", shape.representativeTrip]
     ]),
-    edit = el("a", "info-edit", "Editar zona en iD"),
+    osmInfo = createInfoSection("OpenStreetMap", [
+      [
+        "Estat",
+        !osmTarget.checked
+          ? "OSM_QA pendent"
+          : osmTarget.exists
+            ? "Parada localitzada a OSM"
+            : "Parada no trobada a OSM"
+      ],
+      [
+        "Objecte",
+        osmTarget.exists ? `${osmTarget.osmType} ${osmTarget.osmId}` : "—"
+      ]
+    ]),
+    edit = el(
+      "a",
+      "info-edit",
+      osmTarget.exists ? "Editar parada en iD" : "Editar zona en iD"
+    ),
+    view = el(
+      "a",
+      "info-edit",
+      osmTarget.exists ? "Veure parada en OSM" : "Veure zona en OSM"
+    ),
     technical = el("section", "info-technical");
   back.type = "button";
   back.onclick = () => showShapeInfo(route, shape, true);
-  edit.href = idEditUrl(stop.lat, stop.lon);
-  edit.target = "_blank";
-  edit.rel = "noopener noreferrer";
+  edit.href = idEditUrl(
+    osmTarget.lat,
+    osmTarget.lon,
+    osmTarget.exists ? osmTarget.osmType : "",
+    osmTarget.exists ? osmTarget.osmId : ""
+  );
+  view.href = osmTarget.exists
+    ? osmObjectUrl(osmTarget.osmType, osmTarget.osmId)
+    : osmMapUrl(osmTarget.lat, osmTarget.lon);
+  for (const link of [edit, view]) {
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  }
   [
     createRawDetails("stops.txt · tots els camps", stop.raw),
     createRawDetails("stop_times.txt · tots els camps", stop.stopTimeRaw),
@@ -842,7 +930,17 @@ const showStopInfo = (route, shape, stop, openMobile = true) => {
   ]
     .filter(Boolean)
     .forEach((node) => technical.append(node));
-  content.replaceChildren(back, head, summary, location, tripInfo, edit, technical);
+  content.replaceChildren(
+    back,
+    head,
+    summary,
+    location,
+    tripInfo,
+    osmInfo,
+    edit,
+    view,
+    technical
+  );
   $("info-panel-caption").textContent = `Parada ${stop.code || stop.id}`;
   panel.hidden = false;
   setInfoPanelOpen(openMobile);
@@ -859,7 +957,17 @@ const popupContent = (f) => {
     );
   body.append(name);
   if (!qa) {
-    body.append(el("span", "popup-normal-label", "Parada TMB"));
+    const stop = f.get("stop"),
+      target = osmTargetForStop(stop),
+      label = !target.checked
+        ? "Parada TMB · OSM_QA pendent"
+        : target.exists
+          ? `Parada TMB · OSM ${target.osmType} ${target.osmId}`
+          : "Parada TMB · no trobada a OSM";
+    body.append(
+      el("span", "popup-normal-label", label),
+      createPopupOsmActions(target)
+    );
     root.append(code, body);
     return root;
   }
@@ -896,15 +1004,15 @@ const popupContent = (f) => {
   body.append(list);
   const osmType = f.get("osmType") || "",
     osmId = f.get("osmId") || "",
-    link = el(
-      "a",
-      "popup-edit",
-      osmType && osmId ? "Editar en iD" : "Editar zona en iD"
-    );
-  link.href = idEditUrl(f.get("editLat"), f.get("editLon"), osmType, osmId);
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  body.append(link);
+    target = {
+      checked: true,
+      exists: !!(osmType && osmId),
+      osmType,
+      osmId,
+      lat: f.get("editLat"),
+      lon: f.get("editLon")
+    };
+  body.append(createPopupOsmActions(target));
   root.append(code, body);
   return root;
 };
@@ -1037,12 +1145,17 @@ const initializeMap = () => {
       state.popup.setPosition(f.getGeometry().getCoordinates());
       return;
     }
-    popup.hidden = true;
-    state.popup.setPosition();
     const shape = f.get("shape");
-    if (f.get("type") === "stop")
-      showStopInfo(state.selected, shape, f.get("stop"), true);
-    else showShapeInfo(state.selected, shape, true);
+    if (f.get("type") === "stop") {
+      popup.replaceChildren(popupContent(f));
+      popup.hidden = false;
+      state.popup.setPosition(f.getGeometry().getCoordinates());
+      showStopInfo(state.selected, shape, f.get("stop"), false);
+    } else {
+      popup.hidden = true;
+      state.popup.setPosition();
+      showShapeInfo(state.selected, shape, true);
+    }
   });
   state.map.on("pointermove", (e) => {
     if (!e.dragging)
