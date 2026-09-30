@@ -817,8 +817,7 @@ const createPopupOsmActions = (target) => {
       "a",
       "popup-edit",
       target.exists ? "Veure en OSM" : "Veure zona OSM"
-    ),
-    go = el("button", "popup-edit", "Anar-hi");
+    );
   edit.href = idEditUrl(
     target.lat,
     target.lon,
@@ -832,16 +831,7 @@ const createPopupOsmActions = (target) => {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
   }
-  go.type = "button";
-  go.onclick = () => {
-    if (!state.map || !finite(target.lat) || !finite(target.lon)) return;
-    state.map.getView().animate({
-      center: ol.proj.fromLonLat([target.lon, target.lat]),
-      zoom: state.map.getView().getMaxZoom(),
-      duration: 300
-    });
-  };
-  actions.append(edit, view, go);
+  actions.append(edit, view);
   return actions;
 };
 const showStopInfo = (route, shape, stop, openMobile = true) => {
