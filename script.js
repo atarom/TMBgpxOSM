@@ -8,6 +8,7 @@ const GTFS_URL = "./gtfs.zip",
     shapeLayers: new Map(),
     osmLayers: new Map(),
     hiddenShapes: new Set(),
+    expandedShapeGroups: new Set(),
     qaRouteRelations: new Map(),
     qaRequests: new Map(),
     qaFullRelations: new Map(),
@@ -58,7 +59,12 @@ const setLoading = (title, detail) => {
           '"': "&quot;"
         })[c]
     ),
-  visible = (s) => !state.hiddenShapes.has(s.id);
+  manualVisible = (s) => !state.hiddenShapes.has(s.id),
+  groupVisible = (s) =>
+    s.status === "active" ||
+    s.status === "unknown" ||
+    state.expandedShapeGroups.has(s.status),
+  visible = (s) => manualVisible(s) && groupVisible(s);
 const normalizeStopRef = (value) => {
     const ref = String(value ?? "").trim();
     return /^\d+$/.test(ref) ? ref.padStart(4, "0") : ref;
@@ -156,8 +162,150 @@ const compareRoutes = (a, b) => {
     as.localeCompare(bs, "ca", { numeric: true, sensitivity: "base" })
   );
 };
+const DAY_MS = 86400000,
+  weekdayFields = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday"
+  ];
+const serviceTodayKey = () => {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Europe/Madrid",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      })
+      .formatToParts(new Date())
+      .filter((p) => p.type !== "literal"),
+      values = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+    return `${values.year}${values.month}${values.day}`;
+  },
+  dateKeyToUtc = (key) =>
+    Date.UTC(
+      Number(key.slice(0, 4)),
+      Number(key.slice(4, 6)) - 1,
+      Number(key.slice(6, 8))
+    ),
+  utcToDateKey = (time) => {
+    const d = new Date(time);
+    return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
+  },
+  formatDateKey = (key) =>
+    key
+      ? `${key.slice(6, 8)}/${key.slice(4, 6)}/${key.slice(0, 4)}`
+      : "",
+  dateRanges = (dates) => {
+    if (!dates.length) return [];
+    const ranges = [];
+    let start = dates[0],
+      previous = dates[0];
+    for (let i = 1; i < dates.length; i++) {
+      const current = dates[i];
+      if (dateKeyToUtc(current) - dateKeyToUtc(previous) === DAY_MS) {
+        previous = current;
+        continue;
+      }
+      ranges.push([start, previous]);
+      start = previous = current;
+    }
+    ranges.push([start, previous]);
+    return ranges;
+  },
+  formatDateRange = ([start, end]) =>
+    start === end
+      ? formatDateKey(start)
+      : `${formatDateKey(start)}–${formatDateKey(end)}`,
+  calendarSummary = (dates) => {
+    if (!dates.length) return "Sense dates de servei";
+    const ranges = dateRanges(dates);
+    if (ranges.length <= 6) return ranges.map(formatDateRange).join(" · ");
+    return `${formatDateKey(dates[0])}–${formatDateKey(dates.at(-1))} · ${dates.length} dies de servei`;
+  },
+  classifyDates = (dates, today) => {
+    const sorted = [...dates].sort(),
+      active = dates.has(today),
+      nextDate = sorted.find((date) => date > today) || "",
+      lastDate = [...sorted].reverse().find((date) => date < today) || "";
+    return {
+      dates: sorted,
+      status: active ? "active" : nextDate ? "future" : lastDate ? "past" : "unknown",
+      nextDate,
+      lastDate,
+      firstDate: sorted[0] || "",
+      finalDate: sorted.at(-1) || ""
+    };
+  },
+  chooseRepresentativeTrip = (meta, serviceDates, today, status) => {
+    let candidate = "",
+      candidateDate = "";
+    for (const [serviceId, tripId] of meta.tripByService) {
+      const dates = [...(serviceDates.get(serviceId) || [])].sort();
+      if (!dates.length) continue;
+      if (status === "active" && serviceDates.get(serviceId).has(today))
+        return tripId;
+      if (status === "future") {
+        const next = dates.find((date) => date > today);
+        if (next && (!candidateDate || next < candidateDate)) {
+          candidate = tripId;
+          candidateDate = next;
+        }
+      }
+      if (status === "past") {
+        const previous = [...dates].reverse().find((date) => date < today);
+        if (previous && (!candidateDate || previous > candidateDate)) {
+          candidate = tripId;
+          candidateDate = previous;
+        }
+      }
+    }
+    return candidate || meta.tripByService.values().next().value || "";
+  };
+const streamCalendarDates = (file, serviceIds, serviceDates) =>
+  new Promise((resolve, reject) => {
+    if (!file) return resolve();
+    let buffer = "",
+      first = true;
+    const process = (line) => {
+      if (!line) return;
+      if (first) {
+        first = false;
+        return;
+      }
+      const a = line.indexOf(","),
+        b = line.indexOf(",", a + 1);
+      if (a < 0 || b < 0) return;
+      const serviceId = line.slice(0, a);
+      if (!serviceIds.has(serviceId)) return;
+      const date = line.slice(a + 1, b),
+        exceptionType = line.slice(b + 1).trim(),
+        dates = serviceDates.get(serviceId);
+      if (exceptionType === "1") dates.add(date);
+      else if (exceptionType === "2") dates.delete(date);
+    };
+    file
+      .internalStream("string")
+      .on("data", (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || "";
+        lines.forEach(process);
+      })
+      .on("error", reject)
+      .on("end", () => {
+        process(buffer);
+        resolve();
+      })
+      .resume();
+  });
 const loadGtfs = async () => {
-  setLoading("Carregant el GTFS oficial","Carregant la còpia sincronitzada amb T-mobilitat…");
+  setLoading(
+    "Carregant el GTFS oficial",
+    "Carregant la còpia sincronitzada amb T-mobilitat…"
+  );
   const response = await fetch(GTFS_URL);
   if (!response.ok)
     throw new Error(`No s’ha pogut descarregar el GTFS (HTTP ${response.status})`);
@@ -171,7 +319,10 @@ const loadGtfs = async () => {
     stopMap = new Map(),
     shapeMeta = new Map(),
     shapePoints = new Map(),
-    tripStops = new Map();
+    tripStops = new Map(),
+    serviceIds = new Set(),
+    serviceDates = new Map(),
+    today = serviceTodayKey();
   let idx;
   setLoading("Llegint les línies", "Processant routes.txt…");
   await streamCsv(zip.file("routes.txt"), (r, h) => {
@@ -206,20 +357,58 @@ const loadGtfs = async () => {
   await streamCsv(zip.file("trips.txt"), (r, h) => {
     idx ||= indexes(h);
     const routeId = r[idx.route_id],
-      shapeId = r[idx.shape_id];
-    if (!routeMap.has(routeId) || !shapeId) return;
+      shapeId = r[idx.shape_id],
+      serviceId = r[idx.service_id];
+    if (!routeMap.has(routeId) || !shapeId || !serviceId) return;
     if (!shapeMeta.has(shapeId))
       shapeMeta.set(shapeId, {
         routeId,
         headsigns: new Map(),
         directions: new Map(),
+        serviceIds: new Set(),
+        tripByService: new Map(),
         representativeTrip: ""
       });
     const m = shapeMeta.get(shapeId);
     bump(m.headsigns, r[idx.trip_headsign] || "Recorregut");
     bump(m.directions, r[idx.direction_id] || "0");
-    m.representativeTrip ||= r[idx.trip_id];
+    m.serviceIds.add(serviceId);
+    m.tripByService.set(serviceId, m.tripByService.get(serviceId) || r[idx.trip_id]);
+    serviceIds.add(serviceId);
   });
+  for (const serviceId of serviceIds) serviceDates.set(serviceId, new Set());
+  setLoading("Llegint el calendari", "Processant calendar.txt…");
+  idx = null;
+  const calendarFile = zip.file("calendar.txt");
+  if (calendarFile)
+    await streamCsv(calendarFile, (r, h) => {
+      idx ||= indexes(h);
+      const serviceId = r[idx.service_id];
+      if (!serviceIds.has(serviceId)) return;
+      const start = dateKeyToUtc(r[idx.start_date]),
+        end = dateKeyToUtc(r[idx.end_date]),
+        dates = serviceDates.get(serviceId);
+      if (!finite(start) || !finite(end)) return;
+      for (let time = start; time <= end; time += DAY_MS) {
+        const d = new Date(time),
+          field = weekdayFields[d.getUTCDay()];
+        if (r[idx[field]] === "1") dates.add(utcToDateKey(time));
+      }
+    });
+  setLoading("Llegint el calendari", "Processant excepcions i serveis especials…");
+  await streamCalendarDates(zip.file("calendar_dates.txt"), serviceIds, serviceDates);
+  for (const m of shapeMeta.values()) {
+    const dates = new Set();
+    for (const serviceId of m.serviceIds)
+      for (const date of serviceDates.get(serviceId) || []) dates.add(date);
+    m.schedule = classifyDates(dates, today);
+    m.representativeTrip = chooseRepresentativeTrip(
+      m,
+      serviceDates,
+      today,
+      m.schedule.status
+    );
+  }
   setLoading(
     "Construint les geometries",
     `${shapeMeta.size} recorreguts trobats`
@@ -238,13 +427,11 @@ const loadGtfs = async () => {
   });
   const representativeTrips = new Set();
   for (const m of shapeMeta.values()) {
+    if (!m.representativeTrip) continue;
     representativeTrips.add(m.representativeTrip);
     tripStops.set(m.representativeTrip, []);
   }
-  setLoading(
-    "Assignant les parades",
-    "Processant stop_times.txt"
-  );
+  setLoading("Assignant les parades", "Processant stop_times.txt");
   idx = null;
   await streamCsv(zip.file("stop_times.txt"), (r, h) => {
     idx ||= indexes(h);
@@ -262,23 +449,25 @@ const loadGtfs = async () => {
     });
   });
   setLoading("Preparant l’aplicació", "Ordenant recorreguts i parades…");
-  const repeats = new Map();
   for (const [id, m] of shapeMeta) {
     const route = routeMap.get(m.routeId),
       headsign = mostCommon(m.headsigns) || "Recorregut",
       direction = mostCommon(m.directions) || "0",
-      key = `${m.routeId}:${headsign}`,
-      n = (repeats.get(key) || 0) + 1;
-    repeats.set(key, n);
-    const points = (shapePoints.get(id) || [])
-      .sort((a, b) => a[0] - b[0])
-      .map(([, lat, lon]) => [lat, lon]);
+      points = (shapePoints.get(id) || [])
+        .sort((a, b) => a[0] - b[0])
+        .map(([, lat, lon]) => [lat, lon]);
     if (!points.length) continue;
     route.shapes.push({
       id,
-      label: `Sentit ${headsign}${n > 1 ? ` · variant ${n}` : ""}`,
+      label: `Sentit ${headsign}`,
       headsign,
       direction,
+      status: m.schedule.status,
+      serviceDates: m.schedule.dates,
+      nextDate: m.schedule.nextDate,
+      lastDate: m.schedule.lastDate,
+      firstDate: m.schedule.firstDate,
+      finalDate: m.schedule.finalDate,
       points,
       stops: (tripStops.get(m.representativeTrip) || [])
         .sort((a, b) => a.sequence - b.sequence)
@@ -290,16 +479,39 @@ const loadGtfs = async () => {
         }))
     });
   }
+  const statusOrder = { active: 0, future: 1, past: 2, unknown: 3 };
   state.routes = [...routeMap.values()]
     .filter((r) => r.shapes.length)
-    .map((r) => ({
-      ...r,
-      shapes: r.shapes.sort(
-        (a, b) =>
+    .map((route) => {
+      const shapes = route.shapes.sort((a, b) => {
+        const status = statusOrder[a.status] - statusOrder[b.status];
+        if (status) return status;
+        if (a.status === "future" && a.nextDate !== b.nextDate)
+          return a.nextDate.localeCompare(b.nextDate);
+        if (a.status === "past" && a.lastDate !== b.lastDate)
+          return b.lastDate.localeCompare(a.lastDate);
+        return (
           a.direction.localeCompare(b.direction) ||
-          a.label.localeCompare(b.label, "ca")
-      )
-    }))
+          a.headsign.localeCompare(b.headsign, "ca", { sensitivity: "base" }) ||
+          a.id.localeCompare(b.id, "ca", { numeric: true })
+        );
+      });
+      const duplicates = new Map();
+      for (const shape of shapes) {
+        const key = `${shape.status}:${shape.direction}:${shape.headsign}`;
+        if (!duplicates.has(key)) duplicates.set(key, []);
+        duplicates.get(key).push(shape);
+      }
+      for (const list of duplicates.values())
+        if (list.length > 1)
+          list.forEach((shape, index) => {
+            shape.label = `Sentit ${shape.headsign} · recorregut ${index + 1}`;
+          });
+      shapes.forEach((shape, index) => {
+        shape.colorIndex = index;
+      });
+      return { ...route, shapes };
+    })
     .sort(compareRoutes);
   const modified = response.headers.get("Last-Modified");
   $("dataset-date").textContent =
@@ -486,7 +698,10 @@ const makeQaErrorStyle = () => {
       zIndex: 6
     });
   return (f) => {
-    if (state.hiddenShapes.has(f.get("shapeId"))) return null;
+    const shape = state.selected?.shapes.find(
+      (candidate) => candidate.id === f.get("shapeId")
+    );
+    if (shape && !visible(shape)) return null;
     const type = f.get("type");
     if (type === "qa-stop-error") return gtfsPoint;
     if (type === "qa-stop-distance-line") return distance;
@@ -695,51 +910,61 @@ const clearRouteLayers = () => {
   state.popup?.setPosition();
   $("map-popup").hidden = true;
 };
+const fitVisibleRoute = (route, duration = 400) => {
+  const extent = ol.extent.createEmpty();
+  for (const shape of route.shapes) {
+    if (!visible(shape)) continue;
+    const layer = state.shapeLayers.get(shape.id)?.route,
+      feature = layer?.getSource().getFeatures()[0];
+    if (feature) ol.extent.extend(extent, feature.getGeometry().getExtent());
+  }
+  if (!ol.extent.isEmpty(extent))
+    state.map
+      .getView()
+      .fit(extent, { padding: [45, 45, 45, 45], maxZoom: 15, duration });
+};
 const drawRoute = (route) => {
   clearRouteLayers();
-  const extent = ol.extent.createEmpty();
-  route.shapes.forEach((shape, index) => {
-    const color = colors[index % colors.length],
+  route.shapes.forEach((shape) => {
+    const color = colors[shape.colorIndex % colors.length],
       coords = shape.points
         .filter(([lat, lon]) => finite(lat) && finite(lon))
         .map(([lat, lon]) => ol.proj.fromLonLat([lon, lat]));
     if (coords.length < 2) return;
-    const geometry = new ol.geom.LineString(coords);
-    ol.extent.extend(extent, geometry.getExtent());
-    const routeLayer = new ol.layer.Vector({
+    const geometry = new ol.geom.LineString(coords),
+      routeLayer = new ol.layer.Vector({
         source: new ol.source.Vector({
           features: [new ol.Feature({ geometry })]
         }),
         style: makeRouteStyle(color),
         visible: visible(shape),
-        zIndex: 20 + index
+        zIndex: 20 + shape.colorIndex
       }),
       stops = shape.stops
-        .filter((s) => finite(s.lon) && finite(s.lat))
+        .filter((stop) => finite(stop.lon) && finite(stop.lat))
         .map(
-          (s) =>
+          (stop) =>
             new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([s.lon, s.lat])),
+              geometry: new ol.geom.Point(
+                ol.proj.fromLonLat([stop.lon, stop.lat])
+              ),
               type: "stop",
-              code: s.code || s.id,
-              name: s.name
+              code: stop.code || stop.id,
+              name: stop.name
             })
         ),
       stopLayer = new ol.layer.Vector({
         source: new ol.source.Vector({ features: stops }),
         style: makeStopStyle(color),
         visible: visible(shape),
-        zIndex: 100 + index
+        zIndex: 100 + shape.colorIndex
       });
     state.map.addLayer(routeLayer);
     state.map.addLayer(stopLayer);
     state.shapeLayers.set(shape.id, { route: routeLayer, stops: stopLayer });
   });
   state.map.updateSize();
-  if (!ol.extent.isEmpty(extent))
-    state.map
-      .getView()
-      .fit(extent, { padding: [45, 45, 45, 45], maxZoom: 15, duration: 600 });
+  fitVisibleRoute(route, 600);
 };
 const showMap = (route) => {
   state.map || initializeMap();
@@ -748,25 +973,49 @@ const showMap = (route) => {
     drawRoute(route);
   });
 };
+const refreshShapeLayerVisibility = (shape) => {
+  const isVisible = visible(shape),
+    layers = state.shapeLayers.get(shape.id);
+  if (layers) {
+    layers.route.setVisible(isVisible);
+    layers.stops.setVisible(isVisible);
+  }
+  state.osmLayers.get(shape.id)?.setVisible(isVisible);
+};
 const setShapeVisibility = (shape, isVisible) => {
   isVisible
     ? state.hiddenShapes.delete(shape.id)
     : state.hiddenShapes.add(shape.id);
-  const l = state.shapeLayers.get(shape.id);
-  if (l) {
-    l.route.setVisible(isVisible);
-    l.stops.setVisible(isVisible);
-  }
-  state.osmLayers.get(shape.id)?.setVisible(isVisible);
+  refreshShapeLayerVisibility(shape);
   state.qaErrorLayer?.changed();
   const card = document.querySelector(
     `[data-shape-id="${CSS.escape(shape.id)}"]`
   );
   if (!card) return;
-  card.classList.toggle("is-hidden", !isVisible);
-  const b = card.querySelector(".visibility-toggle");
-  b.setAttribute("aria-pressed", String(isVisible));
-  b.textContent = isVisible ? "Ocultar" : "Mostrar";
+  card.classList.toggle("is-hidden", !manualVisible(shape));
+  const button = card.querySelector(".visibility-toggle");
+  button.setAttribute("aria-pressed", String(manualVisible(shape)));
+  button.textContent = manualVisible(shape) ? "Ocultar" : "Mostrar";
+};
+const setShapeGroupExpanded = (route, status, expanded) => {
+  expanded
+    ? state.expandedShapeGroups.add(status)
+    : state.expandedShapeGroups.delete(status);
+  const section = document.querySelector(
+      `[data-shape-group="${CSS.escape(status)}"]`
+    ),
+    body = section?.querySelector(".shape-group-grid"),
+    button = section?.querySelector(".shape-group-toggle"),
+    shapes = route.shapes.filter((shape) => shape.status === status);
+  if (body) body.hidden = !expanded;
+  if (button) {
+    button.setAttribute("aria-expanded", String(expanded));
+    const noun = status === "past" ? "recorreguts passats" : "pròxims recorreguts";
+    button.textContent = `${expanded ? "Ocultar" : "Mostrar"} ${noun} (${shapes.length})`;
+  }
+  for (const shape of shapes) refreshShapeLayerVisibility(shape);
+  state.qaErrorLayer?.changed();
+  if (state.map) fitVisibleRoute(route);
 };
 let osmQaLoader = null;
 const loadOsmQa = () => {
@@ -804,53 +1053,140 @@ const runLazyOsmQa = async (route, shape, button, status) => {
     button.textContent = "OSM_QA";
   }
 };
-const createShapeCard = (route, shape, index) => {
-  const isVisible = visible(shape),
-    card = el("article", `shape-card${isVisible ? "" : " is-hidden"}`),
+const statusText = (shape) => {
+    if (shape.status === "active") return "Actiu avui";
+    if (shape.status === "future")
+      return shape.nextDate
+        ? `Pròxim servei ${formatDateKey(shape.nextDate)}`
+        : "Pròxim servei";
+    if (shape.status === "past")
+      return shape.lastDate
+        ? `Últim servei ${formatDateKey(shape.lastDate)}`
+        : "Recorregut passat";
+    return "Calendari no disponible";
+  },
+  createDateDetails = (shape) => {
+    const dates = shape.serviceDates,
+      ranges = dateRanges(dates),
+      summary = el(
+        "p",
+        "shape-service-dates",
+        `Dates de servei: ${calendarSummary(dates)}`
+      );
+    if (ranges.length <= 6) return [summary];
+    const details = el("details", "shape-date-details"),
+      toggle = el("summary", "", "Veure totes les dates"),
+      full = el(
+        "p",
+        "",
+        ranges.map(formatDateRange).join(" · ")
+      );
+    details.append(toggle, full);
+    return [summary, details];
+  };
+const createShapeCard = (route, shape) => {
+  const isManualVisible = manualVisible(shape),
+    card = el("article", `shape-card${isManualVisible ? "" : " is-hidden"}`),
     swatch = el("span", "shape-swatch"),
     info = el("div", "shape-information"),
+    titleRow = el("div", "shape-title-row"),
+    status = el(
+      "span",
+      `shape-status shape-status-${shape.status}`,
+      statusText(shape)
+    ),
     qaStatus = el("p", "qa-status"),
     actions = el("div", "shape-actions"),
     toggle = el(
       "button",
       "visibility-toggle",
-      isVisible ? "Ocultar" : "Mostrar"
+      isManualVisible ? "Ocultar" : "Mostrar"
     ),
     download = el("button", "download", "GPX"),
     qa = el("button", "qa-button", "OSM_QA");
   card.dataset.shapeId = shape.id;
-  swatch.style.background = colors[index % colors.length];
+  swatch.style.background = colors[shape.colorIndex % colors.length];
   qaStatus.hidden = true;
+  titleRow.append(el("h3", "", shape.label), status);
   info.append(
-    el("h3", "", shape.label),
+    titleRow,
     el(
       "p",
       "",
       `${shape.points.length} punts · ${shape.stops.length} parades · dir. ${shape.direction}`
     ),
+    ...createDateDetails(shape),
     qaStatus
   );
   toggle.type = download.type = qa.type = "button";
-  toggle.setAttribute("aria-pressed", String(isVisible));
-  toggle.onclick = () => setShapeVisibility(shape, !visible(shape));
+  toggle.setAttribute("aria-pressed", String(isManualVisible));
+  toggle.onclick = () => setShapeVisibility(shape, !manualVisible(shape));
   download.onclick = () => downloadShape(route, shape);
   qa.onclick = () => runLazyOsmQa(route, shape, qa, qaStatus);
   actions.append(toggle, download, qa);
   card.append(swatch, info, actions);
   return card;
 };
+const createShapeGroup = (route, status, shapes) => {
+  const section = el("section", `shape-group shape-group-${status}`),
+    grid = el("div", "shape-group-grid");
+  section.dataset.shapeGroup = status;
+  grid.append(...shapes.map((shape) => createShapeCard(route, shape)));
+  if (status === "active" || status === "unknown") {
+    const title = status === "active" ? "Actius avui" : "Sense calendari",
+      header = el("div", "shape-group-header");
+    header.append(
+      el("strong", "", title),
+      el("span", "shape-group-count", String(shapes.length))
+    );
+    section.append(header, grid);
+    return section;
+  }
+  const expanded = state.expandedShapeGroups.has(status),
+    noun = status === "past" ? "recorreguts passats" : "pròxims recorreguts",
+    button = el(
+      "button",
+      "shape-group-toggle",
+      `${expanded ? "Ocultar" : "Mostrar"} ${noun} (${shapes.length})`
+    );
+  button.type = "button";
+  button.setAttribute("aria-expanded", String(expanded));
+  button.onclick = () =>
+    setShapeGroupExpanded(
+      route,
+      status,
+      !state.expandedShapeGroups.has(status)
+    );
+  grid.hidden = !expanded;
+  section.append(button, grid);
+  return section;
+};
 const selectRoute = (route) => {
   state.selected = route;
   state.hiddenShapes.clear();
+  state.expandedShapeGroups.clear();
   state.qaRouteRelations.clear();
   state.qaRequests.clear();
   resetQaErrorsToggle();
   renderRoutes($("line-search").value);
   $("selected-badge").textContent = route.shortName;
   $("selected-name").textContent = route.longName;
-  $("shape-list").replaceChildren(
-    ...route.shapes.map((shape, index) => createShapeCard(route, shape, index))
-  );
+  const groups = new Map([
+      ["active", []],
+      ["future", []],
+      ["past", []],
+      ["unknown", []]
+    ]),
+    content = [];
+  for (const shape of route.shapes) groups.get(shape.status).push(shape);
+  if (!groups.get("active").length)
+    content.push(
+      el("p", "shape-empty-active", "Cap recorregut actiu avui.")
+    );
+  for (const status of ["active", "future", "past", "unknown"])
+    if (groups.get(status).length)
+      content.push(createShapeGroup(route, status, groups.get(status)));
+  $("shape-list").replaceChildren(...content);
   $("placeholder").hidden = true;
   $("route-view").hidden = false;
   showMap(route);
@@ -877,11 +1213,12 @@ const startApplication = async () => {
   }
 };
 $("line-search").addEventListener("input", (e) => renderRoutes(e.target.value));
-$("download-all").addEventListener("click", () =>
-  state.selected?.shapes.forEach((shape, index) =>
+$("download-all").addEventListener("click", () => {
+  const shapes = state.selected?.shapes.filter(visible) || [];
+  shapes.forEach((shape, index) =>
     setTimeout(() => downloadShape(state.selected, shape), index * 250)
-  )
-);
+  );
+});
 $("qa-errors-toggle").addEventListener("click", () =>
   setQaErrorsVisible(!state.qaErrorsVisible)
 );
