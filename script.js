@@ -50,25 +50,6 @@ const setLoading = (title, detail) => {
 			}
 		return v;
 	},
-	safeName = (v) =>
-		v
-			.normalize("NFD")
-			.replace(/[\u0300-\u036f]/g, "")
-			.replace(/[^a-zA-Z0-9]+/g, "-")
-			.replace(/^-|-$/g, "")
-			.toLowerCase(),
-	escapeXml = (v) =>
-		String(v).replace(
-			/[<>&'"]/g,
-			(c) =>
-				({
-					"<": "&lt;",
-					">": "&gt;",
-					"&": "&amp;",
-					"'": "&apos;",
-					'"': "&quot;"
-				})[c]
-		),
 	manualVisible = (s) => !state.hiddenShapes.has(s.id),
 	groupVisible = (s) =>
 		s.status === "active" ||
@@ -696,48 +677,6 @@ const loadGtfs = async () => {
 	const modified = response.headers.get("Last-Modified");
 	$("dataset-date").textContent =
 		`GTFS oficial · ${(modified ? new Date(modified) : new Date()).toLocaleDateString("ca-ES")}`;
-};
-const makeGpx = (route, shape) => {
-	const title = `Línia ${route.shortName} — ${shape.label}`,
-		desc = `Direcció GTFS ${shape.direction}. Geometria i parades oficials GTFS TMB. shape_id=${shape.id}`,
-		waypoints = shape.stops
-			.map(
-				(s) => `
-	<wpt lat="${s.lat}" lon="${s.lon}">
-		<name>${escapeXml(s.name)}</name>
-		<desc>${escapeXml(`Parada ${s.code || s.id}`)}</desc>
-		<sym>Bus Stop</sym>
-		<type>Parada TMB</type>
-	</wpt>`
-			)
-			.join(""),
-		trackPoints = shape.points
-			.map(([lat, lon]) => `<trkpt lat="${lat}" lon="${lon}"/>`)
-			.join("");
-	return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="TMB Recorreguts GPX">
-	<metadata>
-		<name>${escapeXml(title)}</name>
-		<desc>${escapeXml(desc)}</desc>
-	</metadata>
-	${waypoints}
-	<trk>
-		<name>${escapeXml(title)}</name>
-		<desc>${escapeXml(desc)}</desc>
-		<trkseg>${trackPoints}</trkseg>
-	</trk>
-</gpx>`;
-};
-const downloadShape = (route, shape) => {
-	const a = document.createElement("a");
-	a.href = URL.createObjectURL(
-		new Blob([makeGpx(route, shape)], {
-			type: "application/gpx+xml;charset=utf-8"
-		})
-	);
-	a.download = `tmb-${safeName(route.shortName)}-${safeName(shape.label)}.gpx`;
-	a.click();
-	setTimeout(() => URL.revokeObjectURL(a.href), 500);
 };
 const renderRoutes = (query = "") => {
 	const search = query.trim().toLocaleLowerCase("ca"),
@@ -1670,7 +1609,7 @@ const createShapeCard = (route, shape) => {
 	toggle.setAttribute("aria-pressed", String(isManualVisible));
 	toggle.onclick = () => setShapeVisibility(shape, !manualVisible(shape));
 	detailsButton.onclick = () => showShapeInfo(route, shape, true);
-	download.onclick = () => downloadShape(route, shape);
+	download.onclick = () => window.TmbGpx.download(route, shape);
 	qa.onclick = () => runLazyOsmQa(route, shape, qa, qaStatus);
 	actions.append(detailsButton, toggle, download, qa);
 	card.append(swatch, info, actions);
@@ -1766,7 +1705,7 @@ $("line-search").addEventListener("input", (e) => renderRoutes(e.target.value));
 $("download-all").addEventListener("click", () => {
 	const shapes = state.selected?.shapes.filter(visible) || [];
 	shapes.forEach((shape, index) =>
-		setTimeout(() => downloadShape(state.selected, shape), index * 250)
+		setTimeout(() => window.TmbGpx.download(state.selected, shape), index * 250)
 	);
 });
 $("qa-errors-toggle").addEventListener("click", () =>
