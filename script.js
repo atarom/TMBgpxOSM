@@ -14,7 +14,10 @@ const GTFS_URL = "./gtfs.zip",
     qaFullRelations: new Map(),
     qaFullRequests: new Map(),
     qaErrorLayer: null,
-    qaErrorsVisible: true
+    qaErrorsVisible: true,
+    infoContext: "route",
+    gtfsAgency: null,
+    gtfsFeed: null
   },
   $ = (id) => document.getElementById(id),
   finite = Number.isFinite,
@@ -29,6 +32,7 @@ const setLoading = (title, detail) => {
     $("loading-detail").textContent = detail;
   },
   indexes = (h) => Object.fromEntries(h.map((v, i) => [v, i])),
+  rowObject = (r, h) => Object.fromEntries(h.map((v, i) => [v, r[i] ?? ""])),
   bump = (m, v) => m.set(v, (m.get(v) || 0) + 1),
   mostCommon = (m) => {
     let v = "",
@@ -320,10 +324,25 @@ const loadGtfs = async () => {
     shapeMeta = new Map(),
     shapePoints = new Map(),
     tripStops = new Map(),
+    tripRaw = new Map(),
     serviceIds = new Set(),
     serviceDates = new Map(),
     today = serviceTodayKey();
   let idx;
+  setLoading("Llegint metadades", "Processant operador i font GTFS…");
+  idx = null;
+  const agencyFile = zip.file("agency.txt");
+  if (agencyFile)
+    await streamCsv(agencyFile, (r, h) => {
+      idx ||= indexes(h);
+      if (r[idx.agency_id] === "TMB_") state.gtfsAgency = rowObject(r, h);
+    });
+  idx = null;
+  const feedFile = zip.file("feed_info.txt");
+  if (feedFile)
+    await streamCsv(feedFile, (r, h) => {
+      if (!state.gtfsFeed) state.gtfsFeed = rowObject(r, h);
+    });
   setLoading("Llegint les línies", "Processant routes.txt…");
   await streamCsv(zip.file("routes.txt"), (r, h) => {
     idx ||= indexes(h);
@@ -333,6 +352,7 @@ const loadGtfs = async () => {
       id,
       shortName: r[idx.route_short_name],
       longName: r[idx.route_long_name],
+      raw: rowObject(r, h),
       shapes: []
     });
   });
@@ -349,7 +369,8 @@ const loadGtfs = async () => {
       code: r[idx.stop_code],
       name: r[idx.stop_name],
       lat,
-      lon
+      lon,
+      raw: rowObject(r, h)
     });
   });
   setLoading("Identificant els recorreguts", "Processant trips.txt…");
@@ -360,6 +381,7 @@ const loadGtfs = async () => {
       shapeId = r[idx.shape_id],
       serviceId = r[idx.service_id];
     if (!routeMap.has(routeId) || !shapeId || !serviceId) return;
+    tripRaw.set(r[idx.trip_id], rowObject(r, h));
     if (!shapeMeta.has(shapeId))
       shapeMeta.set(shapeId, {
         routeId,
@@ -367,7 +389,8 @@ const loadGtfs = async () => {
         directions: new Map(),
         serviceIds: new Set(),
         tripByService: new Map(),
-        representativeTrip: ""
+        representativeTrip: "",
+        shapeDistance: 0
       });
     const m = shapeMeta.get(shapeId);
     bump(m.headsigns, r[idx.trip_headsign] || "Recorregut");
@@ -420,10 +443,13 @@ const loadGtfs = async () => {
     if (!shapeMeta.has(id)) return;
     const lat = Number(r[idx.shape_pt_lat]),
       lon = Number(r[idx.shape_pt_lon]),
-      seq = Number(r[idx.shape_pt_sequence]);
+      seq = Number(r[idx.shape_pt_sequence]),
+      distance = Number(r[idx.shape_dist_traveled]);
     if (!finite(lat) || !finite(lon)) return;
     if (!shapePoints.has(id)) shapePoints.set(id, []);
     shapePoints.get(id).push([seq, lat, lon]);
+    if (finite(distance))
+      shapeMeta.get(id).shapeDistance = Math.max(shapeMeta.get(id).shapeDistance, distance);
   });
   const representativeTrips = new Set();
   for (const m of shapeMeta.values()) {
@@ -445,6 +471,7 @@ const loadGtfs = async () => {
         idx.pickup_type === undefined ? "0" : r[idx.pickup_type] || "0",
       dropOffType:
         idx.drop_off_type === undefined ? "0" : r[idx.drop_off_type] || "0",
+      raw: rowObject(r, h),
       stop
     });
   });
@@ -469,13 +496,18 @@ const loadGtfs = async () => {
       firstDate: m.schedule.firstDate,
       finalDate: m.schedule.finalDate,
       points,
+      distance: m.shapeDistance,
+      representativeTrip: m.representativeTrip,
+      serviceIds: [...m.serviceIds],
+      tripRaw: tripRaw.get(m.representativeTrip) || null,
       stops: (tripStops.get(m.representativeTrip) || [])
         .sort((a, b) => a.sequence - b.sequence)
         .map((x) => ({
           ...x.stop,
           sequence: x.sequence,
           pickupType: x.pickupType,
-          dropOffType: x.dropOffType
+          dropOffType: x.dropOffType,
+          stopTimeRaw: x.raw
         }))
     });
   }
@@ -579,6 +611,241 @@ const renderRoutes = (query = "") => {
       return b;
     })
   );
+};
+const infoValue = (value) => {
+  if (value === undefined || value === null || value === "") return "—";
+  return String(value);
+};
+const createInfoRows = (rows) => {
+  const grid = el("div", "info-grid");
+  for (const [label, value] of rows) {
+    const row = el("div", "info-row"),
+      key = el("span", "info-key", label),
+      raw = infoValue(value),
+      val = /^https?:\/\//i.test(raw)
+        ? Object.assign(el("a", "info-value", raw), {
+            href: raw,
+            target: "_blank",
+            rel: "noopener noreferrer"
+          })
+        : el("span", "info-value", raw);
+    row.append(key, val);
+    grid.append(row);
+  }
+  return grid;
+};
+const createInfoSection = (title, rows) => {
+  const section = el("section", "info-section");
+  section.append(el("h3", "", title), createInfoRows(rows));
+  return section;
+};
+const createRawDetails = (title, raw, open = false) => {
+  if (!raw) return null;
+  const details = el("details", "gtfs-raw"),
+    summary = el("summary", "", title),
+    rows = Object.entries(raw);
+  details.open = open;
+  details.append(summary, createInfoRows(rows));
+  return details;
+};
+const polylineDistanceKm = (points) => {
+  let meters = 0;
+  for (let i = 1; i < points.length; i++) {
+    const [lat1, lon1] = points[i - 1],
+      [lat2, lon2] = points[i],
+      p1 = (lat1 * Math.PI) / 180,
+      p2 = (lat2 * Math.PI) / 180,
+      dp = ((lat2 - lat1) * Math.PI) / 180,
+      dl = ((lon2 - lon1) * Math.PI) / 180,
+      a =
+        Math.sin(dp / 2) ** 2 +
+        Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+    meters += 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+  return meters / 1000;
+};
+const pickupText = (value) =>
+  ({
+    "0": "Permesa",
+    "1": "No permesa",
+    "2": "Cal contactar amb l’operador",
+    "3": "Cal coordinar amb el conductor"
+  })[String(value)] || `Codi ${infoValue(value)}`;
+const accessibilityText = (value) =>
+  ({ "0": "Sense informació", "1": "Accessible", "2": "No accessible" })[
+    String(value)
+  ] || `Codi ${infoValue(value)}`;
+const bikesText = (value) =>
+  ({ "0": "Sense informació", "1": "Permeses", "2": "No permeses" })[
+    String(value)
+  ] || `Codi ${infoValue(value)}`;
+const setInfoPanelOpen = (open) => {
+  const panel = $("info-panel"),
+    toggle = $("info-panel-toggle");
+  if (!panel || !toggle) return;
+  panel.classList.toggle("is-open", open);
+  toggle.setAttribute("aria-expanded", String(open));
+};
+const panelHeader = (eyebrow, title, subtitle = "") => {
+  const head = el("div", "info-context-head");
+  head.append(el("span", "eyebrow", eyebrow), el("h2", "", title));
+  if (subtitle) head.append(el("p", "", subtitle));
+  return head;
+};
+const showRouteInfo = (route, openMobile = false) => {
+  if (!route) return;
+  state.infoContext = "route";
+  const panel = $("info-panel"),
+    content = $("info-panel-content"),
+    active = route.shapes.filter((shape) => shape.status === "active"),
+    future = route.shapes.filter((shape) => shape.status === "future"),
+    past = route.shapes.filter((shape) => shape.status === "past"),
+    relevant = active.length ? active : route.shapes,
+    uniqueStops = new Set(relevant.flatMap((shape) => shape.stops.map((stop) => stop.id))),
+    head = panelHeader("Línia", route.shortName, route.longName),
+    summary = createInfoSection("Resum", [
+      ["Recorreguts actius avui", active.length],
+      ["Pròxims recorreguts", future.length],
+      ["Recorreguts passats", past.length],
+      ["Parades", uniqueStops.size]
+    ]),
+    shapeSection = el("section", "info-section"),
+    shapeList = el("div", "info-shape-list");
+  shapeSection.append(el("h3", "", "Recorreguts"));
+  for (const shape of route.shapes) {
+    const button = el("button", "info-shape-button"),
+      strong = el("strong", "", shape.label),
+      meta = el(
+        "span",
+        "",
+        `${statusText(shape)} · ${shape.stops.length} parades · ${polylineDistanceKm(shape.points).toFixed(1)} km`
+      );
+    button.type = "button";
+    button.onclick = () => showShapeInfo(route, shape, true);
+    button.append(strong, meta);
+    shapeList.append(button);
+  }
+  shapeSection.append(shapeList);
+  const technical = el("section", "info-technical");
+  [
+    createRawDetails("routes.txt · tots els camps", route.raw),
+    createRawDetails("agency.txt · operador", state.gtfsAgency),
+    createRawDetails("feed_info.txt · font", state.gtfsFeed)
+  ]
+    .filter(Boolean)
+    .forEach((node) => technical.append(node));
+  content.replaceChildren(head, summary, shapeSection, technical);
+  $("info-panel-caption").textContent = `Línia ${route.shortName}`;
+  panel.hidden = false;
+  $("application").classList.add("has-info");
+  setInfoPanelOpen(openMobile);
+};
+const showShapeInfo = (route, shape, openMobile = true) => {
+  if (!route || !shape) return;
+  state.infoContext = "shape";
+  const panel = $("info-panel"),
+    content = $("info-panel-content"),
+    back = el("button", "info-back", `← Línia ${route.shortName}`),
+    head = panelHeader("Recorregut", shape.label, statusText(shape)),
+    summary = createInfoSection("Servei", [
+      ["Dates", calendarSummary(shape.serviceDates)],
+      ["Parades", shape.stops.length],
+      ["Longitud aproximada", `${polylineDistanceKm(shape.points).toFixed(1)} km`],
+      ["Direcció GTFS", shape.direction],
+      ["shape_id", shape.id],
+      ["trip_id de mostra", shape.representativeTrip]
+    ]),
+    stops = el("details", "info-stop-list"),
+    stopSummary = el("summary", "", `Parades (${shape.stops.length})`),
+    stopButtons = el("div", "info-stop-buttons");
+  back.type = "button";
+  back.onclick = () => showRouteInfo(route, true);
+  shape.stops.forEach((stop) => {
+    const button = el(
+      "button",
+      "info-stop-button",
+      `${stop.sequence}. ${stop.code || stop.id} · ${stop.name}`
+    );
+    button.type = "button";
+    button.onclick = () => showStopInfo(route, shape, stop, true);
+    stopButtons.append(button);
+  });
+  stops.append(stopSummary, stopButtons);
+  const technical = el("section", "info-technical");
+  technical.append(
+    createInfoSection("Identificadors", [
+      ["service_id", shape.serviceIds.join(" · ")],
+      ["Punts de geometria", shape.points.length],
+      ["shape_dist_traveled màxim", shape.distance || "—"]
+    ])
+  );
+  [
+    createRawDetails("trips.txt · viatge de mostra", shape.tripRaw),
+    createRawDetails("routes.txt · línia", route.raw)
+  ]
+    .filter(Boolean)
+    .forEach((node) => technical.append(node));
+  content.replaceChildren(back, head, summary, stops, technical);
+  $("info-panel-caption").textContent = shape.label;
+  panel.hidden = false;
+  setInfoPanelOpen(openMobile);
+};
+const showStopInfo = (route, shape, stop, openMobile = true) => {
+  if (!route || !shape || !stop) return;
+  state.infoContext = "stop";
+  const panel = $("info-panel"),
+    content = $("info-panel-content"),
+    back = el("button", "info-back", `← ${shape.label}`),
+    head = panelHeader(
+      "Parada",
+      stop.code || stop.id,
+      stop.name
+    ),
+    trip = shape.tripRaw || {},
+    summary = createInfoSection("En aquest recorregut", [
+      ["Ordre", stop.sequence],
+      ["Arribada", stop.stopTimeRaw?.arrival_time],
+      ["Sortida", stop.stopTimeRaw?.departure_time],
+      ["Pujada", pickupText(stop.pickupType)],
+      ["Baixada", pickupText(stop.dropOffType)],
+      ["Destinació a la parada", stop.stopTimeRaw?.stop_headsign],
+      ["Distància acumulada", stop.stopTimeRaw?.shape_dist_traveled]
+    ]),
+    location = createInfoSection("Parada", [
+      ["Nom", stop.name],
+      ["Codi", stop.code],
+      ["stop_id", stop.id],
+      ["Latitud", stop.lat],
+      ["Longitud", stop.lon],
+      ["Accessibilitat parada", accessibilityText(stop.raw?.wheelchair_boarding)]
+    ]),
+    tripInfo = createInfoSection("Viatge", [
+      ["Línia", `${route.shortName} · ${route.longName}`],
+      ["Recorregut", shape.label],
+      ["Accessibilitat vehicle", accessibilityText(trip.wheelchair_accessible)],
+      ["Bicicletes", bikesText(trip.bikes_allowed)],
+      ["service_id", trip.service_id],
+      ["trip_id", shape.representativeTrip]
+    ]),
+    edit = el("a", "info-edit", "Editar zona en iD"),
+    technical = el("section", "info-technical");
+  back.type = "button";
+  back.onclick = () => showShapeInfo(route, shape, true);
+  edit.href = idEditUrl(stop.lat, stop.lon);
+  edit.target = "_blank";
+  edit.rel = "noopener noreferrer";
+  [
+    createRawDetails("stops.txt · tots els camps", stop.raw),
+    createRawDetails("stop_times.txt · tots els camps", stop.stopTimeRaw),
+    createRawDetails("trips.txt · tots els camps", shape.tripRaw),
+    createRawDetails("routes.txt · tots els camps", route.raw)
+  ]
+    .filter(Boolean)
+    .forEach((node) => technical.append(node));
+  content.replaceChildren(back, head, summary, location, tripInfo, edit, technical);
+  $("info-panel-caption").textContent = `Parada ${stop.code || stop.id}`;
+  panel.hidden = false;
+  setInfoPanelOpen(openMobile);
 };
 const popupContent = (f) => {
   const qa = f.get("type") === "qa-stop-error",
@@ -749,7 +1016,10 @@ const initializeMap = () => {
     hitGtfs = (e) =>
       state.map.forEachFeatureAtPixel(
         e.pixel,
-        (f) => (f.get("type") === "stop" ? f : undefined),
+        (f) =>
+          f.get("type") === "stop" || f.get("type") === "route-shape"
+            ? f
+            : undefined,
         { hitTolerance: 8, layerFilter: (l) => l !== state.qaErrorLayer }
       ),
     hit = (e) => hitQa(e) || hitGtfs(e);
@@ -758,11 +1028,21 @@ const initializeMap = () => {
     if (!f) {
       popup.hidden = true;
       state.popup.setPosition();
+      if (state.selected) showRouteInfo(state.selected, false);
       return;
     }
-    popup.replaceChildren(popupContent(f));
-    popup.hidden = false;
-    state.popup.setPosition(f.getGeometry().getCoordinates());
+    if (f.get("type") === "qa-stop-error") {
+      popup.replaceChildren(popupContent(f));
+      popup.hidden = false;
+      state.popup.setPosition(f.getGeometry().getCoordinates());
+      return;
+    }
+    popup.hidden = true;
+    state.popup.setPosition();
+    const shape = f.get("shape");
+    if (f.get("type") === "stop")
+      showStopInfo(state.selected, shape, f.get("stop"), true);
+    else showShapeInfo(state.selected, shape, true);
   });
   state.map.on("pointermove", (e) => {
     if (!e.dragging)
@@ -932,9 +1212,15 @@ const drawRoute = (route) => {
         .map(([lat, lon]) => ol.proj.fromLonLat([lon, lat]));
     if (coords.length < 2) return;
     const geometry = new ol.geom.LineString(coords),
+      routeFeature = new ol.Feature({
+        geometry,
+        type: "route-shape",
+        shapeId: shape.id,
+        shape
+      }),
       routeLayer = new ol.layer.Vector({
         source: new ol.source.Vector({
-          features: [new ol.Feature({ geometry })]
+          features: [routeFeature]
         }),
         style: makeRouteStyle(color),
         visible: visible(shape),
@@ -950,7 +1236,10 @@ const drawRoute = (route) => {
               ),
               type: "stop",
               code: stop.code || stop.id,
-              name: stop.name
+              name: stop.name,
+              shapeId: shape.id,
+              shape,
+              stop
             })
         ),
       stopLayer = new ol.layer.Vector({
@@ -1102,6 +1391,7 @@ const createShapeCard = (route, shape) => {
       "visibility-toggle",
       isManualVisible ? "Ocultar" : "Mostrar"
     ),
+    detailsButton = el("button", "info-button", "Info"),
     download = el("button", "download", "GPX"),
     qa = el("button", "qa-button", "OSM_QA");
   card.dataset.shapeId = shape.id;
@@ -1118,12 +1408,13 @@ const createShapeCard = (route, shape) => {
     ...createDateDetails(shape),
     qaStatus
   );
-  toggle.type = download.type = qa.type = "button";
+  toggle.type = detailsButton.type = download.type = qa.type = "button";
   toggle.setAttribute("aria-pressed", String(isManualVisible));
   toggle.onclick = () => setShapeVisibility(shape, !manualVisible(shape));
+  detailsButton.onclick = () => showShapeInfo(route, shape, true);
   download.onclick = () => downloadShape(route, shape);
   qa.onclick = () => runLazyOsmQa(route, shape, qa, qaStatus);
-  actions.append(toggle, download, qa);
+  actions.append(detailsButton, toggle, download, qa);
   card.append(swatch, info, actions);
   return card;
 };
@@ -1189,6 +1480,7 @@ const selectRoute = (route) => {
   $("shape-list").replaceChildren(...content);
   $("placeholder").hidden = true;
   $("route-view").hidden = false;
+  showRouteInfo(route, false);
   showMap(route);
   if (innerWidth < 980)
     $("results").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1222,5 +1514,9 @@ $("download-all").addEventListener("click", () => {
 $("qa-errors-toggle").addEventListener("click", () =>
   setQaErrorsVisible(!state.qaErrorsVisible)
 );
+$("info-panel-toggle").addEventListener("click", () => {
+  const open = $("info-panel-toggle").getAttribute("aria-expanded") === "true";
+  setInfoPanelOpen(!open);
+});
 $("retry").addEventListener("click", startApplication);
 startApplication();
