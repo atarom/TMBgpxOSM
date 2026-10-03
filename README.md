@@ -18,6 +18,7 @@ Consulta les línies i sentits de TMB, visualitza recorreguts actius, futurs i p
 
 ## Tecnologies i dades
 
+- [GTFS TMB](https://developer.tmb.cat/data/gtfs) — dades GTFS oficials de TMB.
 - [OpenLayers](https://openlayers.org/) — visualització del mapa i de les geometries.
 - [JSZip](https://stuk.github.io/jszip/) — lectura del fitxer GTFS.
 - [T-mobilitat Open Data](https://t-mobilitat.atm.cat/web/t-mobilitat/dades-obertes) — font del GTFS oficial.
