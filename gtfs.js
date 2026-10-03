@@ -124,6 +124,11 @@ const serviceTodayKey = () => {
 		if (ranges.length <= 6) return ranges.map(formatDateRange).join(" · ");
 		return `${formatDateKey(dates[0])}–${formatDateKey(dates.at(-1))} · ${dates.length} dies de servei`;
 	},
+	parseServiceTime = (value) => {
+		const match = String(value || "").match(/^(\d+):(\d{2}):(\d{2})$/);
+		if (!match) return NaN;
+		return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+	},
 	classifyDates = (dates, today) => {
 		const sorted = [...dates].sort(),
 			active = dates.has(today),
@@ -355,7 +360,8 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 			shortName: r[idx.route_short_name],
 			longName: r[idx.route_long_name],
 			raw: rowObject(r, h),
-			shapes: []
+			shapes: [],
+			simulationTrips: []
 		});
 	});
 	progress("Llegint les parades", `${routeMap.size} línies TMB trobades`);
@@ -436,6 +442,21 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 			m.schedule.status
 		);
 	}
+	const simulationTrips = new Map();
+	for (const [tripId, raw] of tripRaw) {
+		const dates = serviceDates.get(raw.service_id);
+		if (!dates?.size || !shapeMeta.has(raw.shape_id)) continue;
+		simulationTrips.set(tripId, {
+			id: tripId,
+			routeId: raw.route_id,
+			shapeId: raw.shape_id,
+			serviceId: raw.service_id,
+			serviceDates: dates,
+			headsign: raw.trip_headsign || "",
+			direction: raw.direction_id || "0",
+			anchors: []
+		});
+	}
 	progress(
 		"Construint les geometries",
 		`${shapeMeta.size} recorreguts trobats`
@@ -469,13 +490,28 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 		const tripId = r[idx.trip_id],
 			stopId = r[idx.stop_id],
 			routeId = tripRaw.get(tripId)?.route_id,
-			stop = routeId ? stopMap.get(stopId) : null;
+			stop = routeId ? stopMap.get(stopId) : null,
+			sequence = Number(r[idx.stop_sequence]),
+			simulationTrip = simulationTrips.get(tripId);
 		if (stop) {
 			stop.routeIds ||= new Set();
 			stop.routeIds.add(routeId);
 		}
+		if (simulationTrip && stop) {
+			const arrival = parseServiceTime(r[idx.arrival_time]),
+				departure = parseServiceTime(r[idx.departure_time]);
+			if (finite(arrival) || finite(departure))
+				simulationTrip.anchors.push({
+					sequence,
+					stopId,
+					name: stop.name,
+					lat: stop.lat,
+					lon: stop.lon,
+					arrival,
+					departure
+				});
+		}
 		if (!candidateTrips.has(tripId)) return;
-		const sequence = Number(r[idx.stop_sequence]);
 		if (!tripStats.has(tripId))
 			tripStats.set(tripId, {
 				count: 0,
@@ -501,6 +537,21 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 			stat.lastStopId = stopId;
 		}
 	});
+	for (const trip of simulationTrips.values()) {
+		trip.anchors.sort((a, b) => a.sequence - b.sequence);
+		if (trip.anchors.length < 2) continue;
+		const first = trip.anchors[0],
+			last = trip.anchors.at(-1),
+			startTime = finite(first.departure) ? first.departure : first.arrival,
+			endTime = finite(last.arrival) ? last.arrival : last.departure,
+			route = routeMap.get(trip.routeId);
+		if (!route || !finite(startTime) || !finite(endTime) || endTime < startTime) continue;
+		trip.startTime = startTime;
+		trip.endTime = endTime;
+		trip.startStop = first.name || first.stopId;
+		trip.endStop = last.name || last.stopId;
+		route.simulationTrips.push(trip);
+	}
 	for (const stop of stopMap.values())
 		if (stop.routeIds)
 			stop.routeIds = [...stop.routeIds].sort((a, b) =>
@@ -599,7 +650,11 @@ const load = async (url = "./gtfs.zip", progress = () => {}) => {
 			shapes.forEach((shape, index) => {
 				shape.colorIndex = index;
 			});
-			return { ...route, shapes };
+			route.simulationTrips.sort((a, b) => a.startTime - b.startTime || a.endTime - b.endTime || a.id.localeCompare(b.id));
+			const simulationDates = new Set();
+			for (const trip of route.simulationTrips)
+				for (const date of trip.serviceDates) simulationDates.add(date);
+			return { ...route, shapes, simulationDate: today, simulationDates: [...simulationDates].sort() };
 		})
 		.sort(compareRoutes);
 	return { routes, agency, feed, version: window.TmbGtfsVersion || "" };

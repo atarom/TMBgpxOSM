@@ -115,7 +115,45 @@
 
               <div id="map-popup" class="map-popup" hidden></div>
             </div>
-
+            <section id="simulation-panel" class="simulation-panel" aria-label="Simulació del servei programat" hidden>
+              <div class="simulation-head">
+                <div class="simulation-heading">
+                  <span class="eyebrow">Simulació GTFS</span>
+                  <div class="simulation-date-row">
+                    <strong id="simulation-date">Servei programat</strong>
+                    <label class="simulation-date-picker" for="simulation-service-date">
+                      <span>Data</span>
+                      <select id="simulation-service-date" aria-label="Data de servei disponible al GTFS"></select>
+                    </label>
+                  </div>
+                </div>
+                <div class="simulation-status">
+                  <strong id="simulation-time">—</strong>
+                  <span id="simulation-count">—</span>
+                </div>
+              </div>
+              <div class="simulation-controls">
+                <button id="simulation-play" class="simulation-play" type="button" aria-label="Reprodueix">▶</button>
+                <div class="simulation-timeline">
+                  <input id="simulation-range" type="range" min="0" max="1" step="1" value="0" aria-label="Hora simulada" />
+                  <div class="simulation-range-labels">
+                    <span id="simulation-start">—</span>
+                    <span id="simulation-end">—</span>
+                  </div>
+                </div>
+                <div class="simulation-speeds" aria-label="Velocitat de simulació">
+                  <button type="button" data-simulation-speed="1" aria-pressed="false">×1</button>
+                  <button type="button" data-simulation-speed="10" aria-pressed="false">×10</button>
+                  <button type="button" data-simulation-speed="30" aria-pressed="true">×30</button>
+                  <button type="button" data-simulation-speed="60" aria-pressed="false">×60</button>
+                </div>
+              </div>
+              <div class="simulation-legend" aria-label="Estats dels pseudotorns">
+                <span><i class="simulation-dot simulation-dot-running" aria-hidden="true"></i>En servei</span>
+                <span><i class="simulation-dot simulation-dot-waiting" aria-hidden="true"></i>Espera estimada</span>
+                <span>El 01 correspon a la primera incorporació estimada del dia; la numeració segueix el sentit de la rotació i es manté entre expedicions enllaçades.</span>
+              </div>
+            </section>
             <div id="shape-list" class="shape-list"></div>
           </div>
         </section>

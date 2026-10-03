@@ -374,6 +374,160 @@ main {
 .ol-attribution button {
 	background: #1b1b1e;
 }
+.simulation-panel {
+	display: grid;
+	gap: 12px;
+	padding: 14px 16px;
+	border: 1px solid var(--line);
+	border-top: 0;
+	background: #101012;
+}
+.simulation-head {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 16px;
+}
+.simulation-head .eyebrow {
+	margin-bottom: 3px;
+}
+.simulation-head strong {
+	font-size: 0.82rem;
+}
+.simulation-heading {
+	min-width: 0;
+}
+.simulation-date-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px 14px;
+}
+.simulation-date-picker {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--muted);
+	font-size: 0.68rem;
+	font-weight: 700;
+}
+.simulation-date-picker select {
+	min-height: 38px;
+	max-width: 220px;
+	padding: 0 30px 0 10px;
+	border: 1px solid #55555a;
+	border-radius: 0;
+	background: #1b1b1e;
+	color: #fff;
+	font: inherit;
+}
+.simulation-date-picker select:focus-visible {
+	border-color: var(--red);
+	outline: 2px solid #fff;
+	outline-offset: 2px;
+}
+.simulation-status {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	text-align: right;
+}
+.simulation-status strong {
+	font-size: 1.15rem;
+	font-variant-numeric: tabular-nums;
+}
+.simulation-status span {
+	color: var(--muted);
+	font-size: 0.76rem;
+}
+.simulation-controls {
+	display: grid;
+	grid-template-columns: 44px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 12px;
+}
+.simulation-play,
+.simulation-speeds button {
+	min-height: 44px;
+	border: 1px solid #55555a;
+	border-radius: 0;
+	background: #1b1b1e;
+	color: #fff;
+	font-weight: 800;
+}
+.simulation-play {
+	width: 44px;
+	padding: 0;
+	font-size: 1rem;
+}
+.simulation-play:hover,
+.simulation-play:focus-visible,
+.simulation-speeds button:hover,
+.simulation-speeds button:focus-visible {
+	border-color: var(--red);
+	outline: 0;
+}
+.simulation-speeds {
+	display: flex;
+	gap: 5px;
+}
+.simulation-speeds button {
+	min-width: 46px;
+	padding: 0 9px;
+	font-size: 0.72rem;
+}
+.simulation-speeds button[aria-pressed="true"] {
+	border-color: var(--red);
+	background: var(--red);
+}
+.simulation-play:disabled,
+.simulation-speeds button:disabled,
+#simulation-range:disabled {
+	cursor: default;
+	opacity: 0.45;
+}
+.simulation-timeline {
+	min-width: 0;
+}
+#simulation-range {
+	display: block;
+	width: 100%;
+	margin: 0;
+	accent-color: var(--red);
+}
+.simulation-range-labels {
+	display: flex;
+	justify-content: space-between;
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 0.68rem;
+	font-variant-numeric: tabular-nums;
+}
+.simulation-legend {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px 14px;
+	color: var(--muted);
+	font-size: 0.68rem;
+}
+.simulation-legend span {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.simulation-dot {
+	width: 10px;
+	height: 10px;
+	border: 2px solid #fff;
+	border-radius: 50%;
+}
+.simulation-dot-running {
+	background: #e30613;
+}
+.simulation-dot-waiting {
+	background: #f5b700;
+}
 .map-popup {
 	position: relative;
 	width: min(420px, calc(100vw - 32px));
@@ -1109,6 +1263,20 @@ footer {
 	#map {
 		height: 380px;
 	}
+	.simulation-head {
+		align-items: flex-start;
+	}
+	.simulation-status {
+		display: grid;
+		gap: 2px;
+	}
+	.simulation-controls {
+		grid-template-columns: 44px minmax(0, 1fr);
+	}
+	.simulation-speeds {
+		grid-column: 1 / -1;
+		justify-content: flex-end;
+	}
 	.shape-group-grid {
 		grid-template-columns: 1fr;
 	}
@@ -1136,6 +1304,35 @@ footer {
 	}
 	.info-key {
 		font-size: 0.63rem;
+	}
+	.simulation-panel {
+		padding: 12px;
+	}
+	.simulation-head {
+		display: grid;
+		gap: 8px;
+	}
+	.simulation-date-row {
+		display: grid;
+		gap: 8px;
+	}
+	.simulation-date-picker {
+		justify-content: space-between;
+	}
+	.simulation-date-picker select {
+		min-width: 0;
+		max-width: 100%;
+	}
+	.simulation-status {
+		display: flex;
+		justify-content: space-between;
+		text-align: left;
+	}
+	.simulation-speeds {
+		justify-content: stretch;
+	}
+	.simulation-speeds button {
+		flex: 1 1 0;
 	}
 	.map-popup {
 		width: calc(100vw - 24px);
