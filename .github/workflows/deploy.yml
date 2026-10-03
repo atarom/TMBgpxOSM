@@ -24,7 +24,7 @@ jobs:
       - id: gtfs
         run: |
           mkdir _site
-          cp index.html style.css script.js gpx.js gtfs.js osm-qa.js gtfs-cache.js favicon.ico _site/
+          cp index.html style.css script.js simulation.js gpx.js gtfs.js osm-qa.js gtfs-cache.js favicon.ico _site/
           curl -L --fail --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://t-mobilitat.cat/opendata/static/download/" -o _site/gtfs.zip
           unzip -t _site/gtfs.zip
           rm -rf _gtfs_hash
