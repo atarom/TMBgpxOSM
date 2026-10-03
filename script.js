@@ -860,6 +860,39 @@ const preferredSimulationDate = (route, requestedDate = "") => {
 	if (today && dates.includes(today)) return today;
 	return dates.find((date) => !today || date > today) || dates.at(-1) || "";
 };
+const barcelonaNow = () => {
+	const parts = new Intl.DateTimeFormat("en-GB", {
+			timeZone: "Europe/Madrid",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+			hourCycle: "h23"
+		})
+			.formatToParts(new Date())
+			.filter((part) => part.type !== "literal"),
+		values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+	return {
+		date: `${values.year}${values.month}${values.day}`,
+		seconds: Number(values.hour) * 3600 + Number(values.minute) * 60 + Number(values.second)
+	};
+};
+const previousDateKey = (key) => {
+	const date = new Date(Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8))) - 86400000);
+	return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}`;
+};
+const currentSimulationTarget = (route) => {
+	const now = barcelonaNow(),
+		dates = route.simulationDates || [],
+		previousDate = previousDateKey(now.date),
+		previousTime = now.seconds + 86400,
+		previousActive = dates.includes(previousDate) && (route.simulationTrips || []).some((trip) => trip.serviceDates?.has(previousDate) && trip.startTime <= previousTime && trip.endTime >= previousTime);
+	if (previousActive) return { date: previousDate, time: previousTime };
+	if (dates.includes(now.date)) return { date: now.date, time: now.seconds };
+	return { date: preferredSimulationDate(route), time: null };
+};
 const populateSimulationDates = (route, selectedDate) => {
 	const select = $("simulation-service-date"),
 		today = route.simulationDate || "",
@@ -1222,12 +1255,13 @@ const setSimulationPlaying = (playing) => {
 };
 const setupSimulation = (route, requestedDate = "") => {
 	setSimulationPlaying(false);
-	const simulation = state.simulation,
+	const target = requestedDate ? { date: preferredSimulationDate(route, requestedDate), time: null } : currentSimulationTarget(route),
+		simulation = state.simulation,
 		panel = $("simulation-panel"),
 		range = $("simulation-range"),
 		play = $("simulation-play"),
 		shapeById = new Map(route.shapes.map((shape) => [shape.id, shape])),
-		selectedDate = preferredSimulationDate(route, requestedDate);
+		selectedDate = target.date;
 	simulation.layer?.getSource().clear();
 	simulation.features.clear();
 	simulation.route = route;
@@ -1255,7 +1289,7 @@ const setupSimulation = (route, requestedDate = "") => {
 	$("simulation-date").textContent = `Servei programat · ${pseudoTurnText}`;
 	simulation.min = Math.min(...simulation.trips.map((trip) => trip.startTime));
 	simulation.max = Math.max(...simulation.trips.map((trip) => trip.endTime));
-	simulation.time = simulation.min;
+	simulation.time = finite(target.time) ? Math.max(simulation.min, Math.min(simulation.max, target.time)) : simulation.min;
 	play.disabled = false;
 	range.disabled = false;
 	range.min = String(Math.floor(simulation.min));
