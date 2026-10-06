@@ -1,0 +1,47 @@
+.simulation-map-tools {
+	display: grid;
+	grid-template-columns: auto minmax(0,1fr);
+	align-items: center;
+	gap: 6px 12px;
+	padding-top: 2px;
+}
+#simulation-location {
+	grid-row: 1 / 3;
+	min-height: 44px;
+	padding: 0 12px;
+	border: 1px solid #55555a;
+	border-radius: 0;
+	background: #1b1b1e;
+	color: #fff;
+	font-size: .72rem;
+	font-weight: 800;
+}
+#simulation-location:hover,
+#simulation-location:focus-visible {
+	border-color: #36a3ff;
+	outline: 0;
+}
+#simulation-location:disabled {
+	cursor: wait;
+	opacity: .55;
+}
+#simulation-location-status,
+#simulation-follow-status {
+	min-width: 0;
+	color: var(--muted);
+	font-size: .68rem;
+	line-height: 1.3;
+	overflow-wrap: anywhere;
+}
+#simulation-follow-status {
+	color: #d7d7da;
+}
+@media (max-width: 640px) {
+	.simulation-map-tools {
+		grid-template-columns: 1fr;
+	}
+	#simulation-location {
+		grid-row: auto;
+		width: 100%;
+	}
+}
