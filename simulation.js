@@ -228,39 +228,57 @@ const simulationAnchorDistance = (a, b) => {
 		y = ol.proj.fromLonLat([b.lon, b.lat]);
 	return Math.hypot(x[0] - y[0], x[1] - y[1]);
 };
-const betterSimulationContinuation = (candidate, current) => {
-	if (!current) return true;
-	if (candidate.exactStop !== current.exactStop) return candidate.exactStop;
-	if (candidate.changesDirection !== current.changesDirection) return candidate.changesDirection;
-	if (candidate.gap !== current.gap) return candidate.gap > current.gap;
-	if (candidate.distance !== current.distance) return candidate.distance < current.distance;
-	return candidate.pseudoTurn.id < current.pseudoTurn.id;
+const simulationContinuationCandidate = (previous, next) => {
+	const end = previous.anchors.at(-1),
+		start = next.anchors[0],
+		gap = next.startTime - previous.endTime;
+	if (gap < 0 || gap > 1200) return null;
+	const exactStop = end.stopId === start.stopId,
+		changesDirection = previous.direction !== next.direction,
+		distance = simulationAnchorDistance(end, start);
+	if (!exactStop && (!changesDirection || gap > 600 || distance > 90)) return null;
+	if (exactStop && !changesDirection && gap > 420) return null;
+	return { previous, next, exactStop, changesDirection, gap, distance };
+};
+const compareSimulationContinuations = (a, b) => {
+	if (a.next.startTime !== b.next.startTime) return a.next.startTime - b.next.startTime;
+	if (a.exactStop !== b.exactStop) return a.exactStop ? -1 : 1;
+	if (a.changesDirection !== b.changesDirection) return a.changesDirection ? -1 : 1;
+	if (a.gap !== b.gap) return b.gap - a.gap;
+	if (a.distance !== b.distance) return a.distance - b.distance;
+	return a.previous.id.localeCompare(b.previous.id);
 };
 const buildSimulationPseudoTurns = (trips) => {
-	const pseudoTurns = [];
-	for (const trip of [...trips].sort((a, b) => a.startTime - b.startTime || a.endTime - b.endTime || a.id.localeCompare(b.id))) {
-		const start = trip.anchors[0];
-		let best = null;
-		for (const pseudoTurn of pseudoTurns) {
-			const previous = pseudoTurn.trips.at(-1),
-				end = previous.anchors.at(-1),
-				gap = trip.startTime - previous.endTime;
-			if (gap < 0 || gap > 1200) continue;
-			const exactStop = end.stopId === start.stopId,
-				distance = simulationAnchorDistance(end, start);
-			if (!exactStop && distance > 180) continue;
-			const candidate = {
-				pseudoTurn,
-				exactStop,
-				changesDirection: previous.direction !== trip.direction,
-				gap,
-				distance
-			};
-			if (betterSimulationContinuation(candidate, best)) best = candidate;
+	const orderedTrips = [...trips].sort((a, b) => a.startTime - b.startTime || a.endTime - b.endTime || a.id.localeCompare(b.id)),
+		candidates = [];
+	for (let nextIndex = 0; nextIndex < orderedTrips.length; nextIndex++)
+		for (let previousIndex = 0; previousIndex < nextIndex; previousIndex++) {
+			const candidate = simulationContinuationCandidate(orderedTrips[previousIndex], orderedTrips[nextIndex]);
+			if (candidate) candidates.push(candidate);
 		}
-		if (best) best.pseudoTurn.trips.push(trip);
-		else pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: [trip] });
+	candidates.sort(compareSimulationContinuations);
+	const incoming = new Map(),
+		outgoing = new Map();
+	for (const candidate of candidates) {
+		if (incoming.has(candidate.next.id) || outgoing.has(candidate.previous.id)) continue;
+		incoming.set(candidate.next.id, candidate.previous);
+		outgoing.set(candidate.previous.id, candidate.next);
 	}
+	const pseudoTurns = [],
+		visited = new Set();
+	for (const trip of orderedTrips) {
+		if (incoming.has(trip.id) || visited.has(trip.id)) continue;
+		const chain = [];
+		let current = trip;
+		while (current && !visited.has(current.id)) {
+			chain.push(current);
+			visited.add(current.id);
+			current = outgoing.get(current.id) || null;
+		}
+		pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: chain });
+	}
+	for (const trip of orderedTrips)
+		if (!visited.has(trip.id)) pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: [trip] });
 	return pseudoTurns;
 };
 const simulationPseudoTurnStateAtTime = (pseudoTurn, time) => {
