@@ -81,3 +81,87 @@
 		width: 100%;
 	}
 }
+.simulation-diagnostics {
+	border-top: 1px solid var(--line);
+	border-bottom: 1px solid var(--line);
+	background: #141416;
+}
+.simulation-diagnostics-toggle {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 40px;
+	padding: 0 10px;
+	color: #fff;
+	font-size: .7rem;
+	font-weight: 900;
+	cursor: pointer;
+}
+.simulation-diagnostics-toggle:focus-visible {
+	outline: 2px solid #fff;
+	outline-offset: 2px;
+}
+.simulation-diagnostics-summary {
+	color: var(--muted);
+	font-size: .66rem;
+	font-weight: 800;
+}
+.simulation-diagnostics-list {
+	border-top: 1px solid #303034;
+}
+.simulation-diagnostic-row {
+	display: grid;
+	grid-template-columns: 38px 96px minmax(0,1fr) 52px;
+	align-items: center;
+	gap: 8px;
+	min-height: 34px;
+	padding: 5px 10px;
+	border-bottom: 1px solid #29292d;
+	font-size: .68rem;
+}
+.simulation-diagnostic-row:last-child {
+	border-bottom: 0;
+}
+.simulation-diagnostic-number {
+	font-variant-numeric: tabular-nums;
+}
+.simulation-diagnostic-times,
+.simulation-diagnostic-trips {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+.simulation-diagnostic-state-running {
+	color: #ff5a63;
+}
+.simulation-diagnostic-state-waiting {
+	color: #ffd24a;
+}
+.simulation-diagnostic-state-future {
+	color: #78c4ff;
+}
+.simulation-diagnostic-state-past {
+	color: #8f8f94;
+}
+.simulation-diagnostic-state-unknown {
+	color: #d7d7da;
+}
+.simulation-diagnostic-trips {
+	text-align: right;
+}
+@media (max-width: 480px) {
+	.simulation-diagnostic-row {
+		grid-template-columns: 34px minmax(0,1fr) auto;
+		gap: 4px 8px;
+	}
+	.simulation-diagnostic-times {
+		grid-column: 2;
+	}
+	.simulation-diagnostic-state {
+		grid-column: 2;
+	}
+	.simulation-diagnostic-trips {
+		grid-column: 3;
+		grid-row: 1 / 3;
+	}
+}

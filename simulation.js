@@ -380,6 +380,73 @@ const simulationPseudoTurnStateAtTime = (pseudoTurn, time) => {
 	return null;
 };
 const simulationPseudoTurnBounds = (pseudoTurn) => [pseudoTurn.trips[0].startTime, pseudoTurn.trips.at(-1).endTime];
+let simulationDiagnosticMinute = null;
+const ensureSimulationDiagnostics = () => {
+	let details = $("simulation-diagnostics");
+	if (details) return details;
+	const legend = document.querySelector(".simulation-legend");
+	if (!legend) return null;
+	details = el("details", "simulation-diagnostics");
+	details.id = "simulation-diagnostics";
+	const summary = el("summary", "simulation-diagnostics-toggle"),
+		title = el("span", "", "Diagnòstic de pseudotorns"),
+		count = el("span", "simulation-diagnostics-summary", "—"),
+		list = el("div", "simulation-diagnostics-list");
+	count.id = "simulation-diagnostics-summary";
+	list.id = "simulation-diagnostics-list";
+	summary.append(title, count);
+	details.append(summary, list);
+	legend.before(details);
+	details.addEventListener("toggle", () => {
+		if (!details.open) return;
+		simulationDiagnosticMinute = null;
+		renderSimulationDiagnostics(true);
+	});
+	return details;
+};
+const simulationDiagnosticState = (pseudoTurn, time) => {
+	const active = simulationPseudoTurnStateAtTime(pseudoTurn, time),
+		[start, end] = simulationPseudoTurnBounds(pseudoTurn);
+	if (active?.status === "running") return ["running", "En servei"];
+	if (active?.status === "waiting") return ["waiting", "En espera"];
+	if (time < start) return ["future", "Encara no iniciat"];
+	if (time > end) return ["past", "Finalitzat"];
+	return ["unknown", "Sense posició"];
+};
+const renderSimulationDiagnostics = (force = false) => {
+	const details = ensureSimulationDiagnostics(),
+		count = $("simulation-diagnostics-summary");
+	if (!details || !count) return;
+	count.textContent = `${model.pseudoTurns.length} del dia`;
+	if (!details.open) return;
+	const minute = Math.floor(model.time / 60);
+	if (!force && minute === simulationDiagnosticMinute) return;
+	simulationDiagnosticMinute = minute;
+	const list = $("simulation-diagnostics-list");
+	if (!list) return;
+	const rows = [...model.pseudoTurns]
+		.sort((a, b) => Number(a.label) - Number(b.label))
+		.map((pseudoTurn) => {
+			const [start, end] = simulationPseudoTurnBounds(pseudoTurn),
+				[state, stateText] = simulationDiagnosticState(pseudoTurn, model.time),
+				row = el("div", "simulation-diagnostic-row"),
+				number = el("strong", "simulation-diagnostic-number", pseudoTurn.label),
+				times = el("span", "simulation-diagnostic-times", `${formatSimulationTime(start)}–${formatSimulationTime(end)}`),
+				status = el("span", `simulation-diagnostic-state simulation-diagnostic-state-${state}`, stateText),
+				trips = el("span", "simulation-diagnostic-trips", `${pseudoTurn.trips.length} exp.`);
+			row.dataset.state = state;
+			row.append(number, times, status, trips);
+			return row;
+		});
+	list.replaceChildren(...rows);
+};
+const clearSimulationDiagnostics = () => {
+	simulationDiagnosticMinute = null;
+	const count = $("simulation-diagnostics-summary"),
+		list = $("simulation-diagnostics-list");
+	if (count) count.textContent = "0 del dia";
+	list?.replaceChildren();
+};
 const simulationPseudoTurnPhase = (pseudoTurn, time, directionOrder) => {
 	const pseudoTurnState = simulationPseudoTurnStateAtTime(pseudoTurn, time);
 	if (!pseudoTurnState) return null;
@@ -532,6 +599,7 @@ const renderSimulationVehicles = () => {
 	$("simulation-time").textContent = formatSimulationTime(simulation.time);
 	$("simulation-count").textContent = waiting ? `${running} en servei · ${waiting} en espera` : `${running} ${running === 1 ? "autobús" : "autobusos"} en servei`;
 	$("simulation-range").value = String(Math.round(simulation.time));
+	renderSimulationDiagnostics();
 };
 const setSimulationTime = (value) => {
 	const simulation = model;
@@ -599,6 +667,7 @@ const setupSimulation = (route, requestedDate = "") => {
 		$("simulation-start").textContent = "—";
 		$("simulation-end").textContent = "—";
 		for (const button of document.querySelectorAll("[data-simulation-speed]")) button.disabled = true;
+		clearSimulationDiagnostics();
 		return;
 	}
 	const pseudoTurnText = `${simulation.pseudoTurns.length} ${simulation.pseudoTurns.length === 1 ? "pseudotorn estimat" : "pseudotorns estimats"}`;
@@ -615,6 +684,7 @@ const setupSimulation = (route, requestedDate = "") => {
 	$("simulation-end").textContent = formatSimulationTime(simulation.max);
 	for (const button of document.querySelectorAll("[data-simulation-speed]")) button.disabled = false;
 	setSimulationSpeed(simulation.speed);
+	simulationDiagnosticMinute = null;
 	renderSimulationVehicles();
 };
 const createLayer = () => {
@@ -666,6 +736,7 @@ const popupContent = (feature) => simulationBusPopupContent(feature);
 const init = (options = {}) => {
 	if (typeof options.isShapeVisible === "function") shapeVisible = options.isShapeVisible;
 	if (typeof options.closePopup === "function") closePopup = options.closePopup;
+	ensureSimulationDiagnostics();
 	$("simulation-toggle")?.addEventListener("click", () => setOpen(!model.open));
 	$("simulation-play")?.addEventListener("click", () => setSimulationPlaying(!model.playing));
 	$("simulation-service-date")?.addEventListener("change", (event) => {
