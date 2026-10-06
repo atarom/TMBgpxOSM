@@ -17,7 +17,7 @@ followStatus.id = "simulation-follow-status";
 followStatus.textContent = "Clica un pseudotorn al mapa per seguir-lo";
 followStatus.setAttribute("aria-live", "polite");
 tools.append(locationButton, locationStatus, followStatus);
-$("simulation-legend")?.before(tools);
+document.querySelector(".simulation-legend")?.before(tools);
 const featurePseudoId = (feature) => feature?.get("pseudoTurn")?.id ?? null;
 const featurePseudoLabel = (feature) => feature?.get("pseudoTurn")?.label || "—";
 const clearTrackingMarker = () => {
