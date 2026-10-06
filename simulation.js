@@ -252,9 +252,87 @@ const compareSimulationContinuations = (a, b) => {
 	if (a.next.startTime !== b.next.startTime) return a.next.startTime - b.next.startTime;
 	if (a.exactStop !== b.exactStop) return a.exactStop ? -1 : 1;
 	if (a.changesDirection !== b.changesDirection) return a.changesDirection ? -1 : 1;
-	if (a.gap !== b.gap) return b.gap - a.gap;
+	if (a.gap !== b.gap) return a.gap - b.gap;
 	if (a.distance !== b.distance) return a.distance - b.distance;
 	return a.previous.id.localeCompare(b.previous.id);
+};
+const simulationContinuationScore = (candidate) =>
+	(candidate.exactStop ? 10000 : 0) +
+	(candidate.changesDirection ? 5000 : 0) +
+	Math.max(0, 1200 - candidate.gap) * 2 -
+	Math.round(candidate.distance);
+const buildSimulationSequenceChains = (orderedTrips, candidates) => {
+	const incoming = new Map(),
+		outgoing = new Map(),
+		tripById = new Map(orderedTrips.map((trip) => [trip.id, trip]));
+	for (const candidate of candidates.filter((item) => item.sequenceMatch).sort(compareSimulationContinuations)) {
+		if (incoming.has(candidate.next.id) || outgoing.has(candidate.previous.id)) continue;
+		incoming.set(candidate.next.id, candidate.previous.id);
+		outgoing.set(candidate.previous.id, candidate.next.id);
+	}
+	const chains = [],
+		visited = new Set();
+	for (const trip of orderedTrips) {
+		if (incoming.has(trip.id) || visited.has(trip.id)) continue;
+		const chainTrips = [];
+		let current = trip;
+		while (current && !visited.has(current.id)) {
+			chainTrips.push(current);
+			visited.add(current.id);
+			current = tripById.get(outgoing.get(current.id)) || null;
+		}
+		chains.push({ id: chains.length, trips: chainTrips });
+	}
+	for (const trip of orderedTrips)
+		if (!visited.has(trip.id)) chains.push({ id: chains.length, trips: [trip] });
+	return chains;
+};
+const simulationChainContinuation = (previousChain, nextChain) => {
+	const candidate = simulationContinuationCandidate(previousChain.trips.at(-1), nextChain.trips[0]);
+	if (!candidate || candidate.sequenceMatch) return null;
+	if (candidate.exactStop && candidate.changesDirection && candidate.gap <= 600) return candidate;
+	if (candidate.exactStop && !candidate.changesDirection && candidate.gap <= 180) return candidate;
+	if (!candidate.exactStop && candidate.changesDirection && candidate.gap <= 300 && candidate.distance <= 90) return candidate;
+	return null;
+};
+const matchSimulationChains = (chains) => {
+	const options = new Map();
+	for (const previousChain of chains) {
+		const list = [];
+		for (const nextChain of chains) {
+			if (previousChain === nextChain) continue;
+			const candidate = simulationChainContinuation(previousChain, nextChain);
+			if (candidate) list.push({ nextId: nextChain.id, candidate, score: simulationContinuationScore(candidate) });
+		}
+		list.sort((a, b) => b.score - a.score || compareSimulationContinuations(a.candidate, b.candidate));
+		options.set(previousChain.id, list);
+	}
+	const matchedStart = new Map();
+	const assign = (previousId, seen) => {
+		for (const option of options.get(previousId) || []) {
+			if (seen.has(option.nextId)) continue;
+			seen.add(option.nextId);
+			const currentPrevious = matchedStart.get(option.nextId);
+			if (currentPrevious === undefined || assign(currentPrevious, seen)) {
+				matchedStart.set(option.nextId, previousId);
+				return true;
+			}
+		}
+		return false;
+	};
+	const order = [...chains].sort((a, b) => {
+		const aScore = options.get(a.id)?.[0]?.score || -Infinity,
+			bScore = options.get(b.id)?.[0]?.score || -Infinity;
+		return bScore - aScore || a.trips.at(-1).endTime - b.trips.at(-1).endTime || a.id - b.id;
+	});
+	for (const chain of order) assign(chain.id, new Set());
+	const outgoing = new Map(),
+		incoming = new Map();
+	for (const [nextId, previousId] of matchedStart) {
+		outgoing.set(previousId, nextId);
+		incoming.set(nextId, previousId);
+	}
+	return { outgoing, incoming };
 };
 const buildSimulationPseudoTurns = (trips) => {
 	const orderedTrips = [...trips].sort((a, b) => a.startTime - b.startTime || a.endTime - b.endTime || a.id.localeCompare(b.id)),
@@ -264,40 +342,24 @@ const buildSimulationPseudoTurns = (trips) => {
 			const candidate = simulationContinuationCandidate(orderedTrips[previousIndex], orderedTrips[nextIndex]);
 			if (candidate) candidates.push(candidate);
 		}
-	const sequenceCandidates = candidates.filter((candidate) => candidate.sequenceMatch).sort(compareSimulationContinuations),
-		incoming = new Map(),
-		outgoing = new Map(),
-		sequenceTrips = new Set();
-	for (const candidate of sequenceCandidates) {
-		if (incoming.has(candidate.next.id) || outgoing.has(candidate.previous.id)) continue;
-		incoming.set(candidate.next.id, candidate.previous);
-		outgoing.set(candidate.previous.id, candidate.next);
-		sequenceTrips.add(candidate.previous.id);
-		sequenceTrips.add(candidate.next.id);
-	}
-	const fallbackCandidates = candidates
-		.filter((candidate) => !candidate.sequenceMatch && !sequenceTrips.has(candidate.previous.id) && !sequenceTrips.has(candidate.next.id))
-		.sort(compareSimulationContinuations);
-	for (const candidate of fallbackCandidates) {
-		if (incoming.has(candidate.next.id) || outgoing.has(candidate.previous.id)) continue;
-		incoming.set(candidate.next.id, candidate.previous);
-		outgoing.set(candidate.previous.id, candidate.next);
-	}
-	const pseudoTurns = [],
+	const chains = buildSimulationSequenceChains(orderedTrips, candidates),
+		{ outgoing, incoming } = matchSimulationChains(chains),
+		chainById = new Map(chains.map((chain) => [chain.id, chain])),
+		pseudoTurns = [],
 		visited = new Set();
-	for (const trip of orderedTrips) {
-		if (incoming.has(trip.id) || visited.has(trip.id)) continue;
-		const chain = [];
-		let current = trip;
+	for (const chain of chains) {
+		if (incoming.has(chain.id) || visited.has(chain.id)) continue;
+		const chainTrips = [];
+		let current = chain;
 		while (current && !visited.has(current.id)) {
-			chain.push(current);
+			chainTrips.push(...current.trips);
 			visited.add(current.id);
-			current = outgoing.get(current.id) || null;
+			current = chainById.get(outgoing.get(current.id)) || null;
 		}
-		pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: chain });
+		pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: chainTrips });
 	}
-	for (const trip of orderedTrips)
-		if (!visited.has(trip.id)) pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: [trip] });
+	for (const chain of chains)
+		if (!visited.has(chain.id)) pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: [...chain.trips] });
 	return pseudoTurns;
 };
 const simulationPseudoTurnStateAtTime = (pseudoTurn, time) => {
