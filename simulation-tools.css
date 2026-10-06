@@ -45,3 +45,39 @@
 		width: 100%;
 	}
 }
+.simulation-speeds {
+	display: grid;
+	grid-template-columns: auto minmax(130px,1fr) 42px;
+	align-items: center;
+	gap: 8px;
+	min-width: 240px;
+}
+.simulation-speeds label {
+	color: var(--muted);
+	font-size: .68rem;
+	font-weight: 800;
+}
+#simulation-speed-range {
+	width: 100%;
+	margin: 0;
+	accent-color: var(--red);
+}
+#simulation-speed-value {
+	min-width: 42px;
+	color: #fff;
+	font-size: .76rem;
+	font-weight: 900;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+#simulation-speed-range:disabled {
+	cursor: default;
+	opacity: .45;
+}
+@media (max-width: 640px) {
+	.simulation-speeds {
+		grid-template-columns: auto minmax(0,1fr) 42px;
+		min-width: 0;
+		width: 100%;
+	}
+}

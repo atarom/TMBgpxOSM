@@ -18,6 +18,39 @@ followStatus.textContent = "Clica un pseudotorn al mapa per seguir-lo";
 followStatus.setAttribute("aria-live", "polite");
 tools.append(locationButton, locationStatus, followStatus);
 document.querySelector(".simulation-legend")?.before(tools);
+const speedControl = document.querySelector(".simulation-speeds");
+const speedLabel = document.createElement("label");
+speedLabel.htmlFor = "simulation-speed-range";
+speedLabel.textContent = "Velocitat";
+const speedRange = document.createElement("input");
+speedRange.id = "simulation-speed-range";
+speedRange.type = "range";
+speedRange.min = "1";
+speedRange.max = "120";
+speedRange.step = "1";
+speedRange.value = "1";
+speedRange.setAttribute("aria-label", "Velocitat de simulació");
+const speedValue = document.createElement("output");
+speedValue.id = "simulation-speed-value";
+speedValue.setAttribute("for", "simulation-speed-range");
+speedValue.textContent = "×1";
+const speedBridge = document.createElement("button");
+speedBridge.type = "button";
+speedBridge.hidden = true;
+speedBridge.dataset.simulationSpeed = "1";
+speedControl?.replaceChildren(speedLabel, speedRange, speedValue, speedBridge);
+const setSimulationSpeedControl = (value, apply = true) => {
+	const speed = Math.max(1, Math.min(120, Math.round(Number(value) || 1)));
+	speedRange.value = String(speed);
+	speedValue.textContent = `×${speed}`;
+	speedBridge.dataset.simulationSpeed = String(speed);
+	if (apply) speedBridge.click();
+};
+const syncSpeedAvailability = () => {
+	speedRange.disabled = speedBridge.disabled;
+};
+speedRange.addEventListener("input", () => setSimulationSpeedControl(speedRange.value));
+new MutationObserver(syncSpeedAvailability).observe(speedBridge, { attributes:true, attributeFilter:["disabled"] });
 const featurePseudoId = (feature) => feature?.get("pseudoTurn")?.id ?? null;
 const featurePseudoLabel = (feature) => feature?.get("pseudoTurn")?.label || "—";
 const clearTrackingMarker = () => {
@@ -155,6 +188,13 @@ $("simulation-toggle")?.addEventListener("click", () => {
 		state.userLayer?.setVisible(false);
 	} else state.userLayer?.setVisible(true);
 });
+const originalInit = window.TmbSimulation.init;
+window.TmbSimulation.init = (options = {}) => {
+	const result = originalInit(options);
+	setSimulationSpeedControl(1);
+	syncSpeedAvailability();
+	return result;
+};
 const originalSelectRoute = window.TmbSimulation.selectRoute;
 window.TmbSimulation.selectRoute = (route) => {
 	clearFollow();
