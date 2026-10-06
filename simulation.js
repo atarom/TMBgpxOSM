@@ -228,6 +228,11 @@ const simulationAnchorDistance = (a, b) => {
 		y = ol.proj.fromLonLat([b.lon, b.lat]);
 	return Math.hypot(x[0] - y[0], x[1] - y[1]);
 };
+const simulationTripSequence = (trip) => {
+	const parts = String(trip.id || "").split(".");
+	if (parts.length !== 5 || !/^\d+$/.test(parts[3])) return null;
+	return { key: `${parts[0]}.${parts[1]}.${parts[2]}.${parts[4]}`, value: Number(parts[3]) };
+};
 const simulationContinuationCandidate = (previous, next) => {
 	const end = previous.anchors.at(-1),
 		start = next.anchors[0],
@@ -235,10 +240,13 @@ const simulationContinuationCandidate = (previous, next) => {
 	if (gap < 0 || gap > 1200) return null;
 	const exactStop = end.stopId === start.stopId,
 		changesDirection = previous.direction !== next.direction,
-		distance = simulationAnchorDistance(end, start);
+		distance = simulationAnchorDistance(end, start),
+		previousSequence = simulationTripSequence(previous),
+		nextSequence = simulationTripSequence(next),
+		sequenceMatch = !!previousSequence && !!nextSequence && exactStop && changesDirection && previousSequence.key === nextSequence.key && nextSequence.value === previousSequence.value + 1;
 	if (!exactStop && (!changesDirection || gap > 600 || distance > 90)) return null;
 	if (exactStop && !changesDirection && gap > 420) return null;
-	return { previous, next, exactStop, changesDirection, gap, distance };
+	return { previous, next, exactStop, changesDirection, gap, distance, sequenceMatch };
 };
 const compareSimulationContinuations = (a, b) => {
 	if (a.next.startTime !== b.next.startTime) return a.next.startTime - b.next.startTime;
@@ -256,10 +264,21 @@ const buildSimulationPseudoTurns = (trips) => {
 			const candidate = simulationContinuationCandidate(orderedTrips[previousIndex], orderedTrips[nextIndex]);
 			if (candidate) candidates.push(candidate);
 		}
-	candidates.sort(compareSimulationContinuations);
-	const incoming = new Map(),
-		outgoing = new Map();
-	for (const candidate of candidates) {
+	const sequenceCandidates = candidates.filter((candidate) => candidate.sequenceMatch).sort(compareSimulationContinuations),
+		incoming = new Map(),
+		outgoing = new Map(),
+		sequenceTrips = new Set();
+	for (const candidate of sequenceCandidates) {
+		if (incoming.has(candidate.next.id) || outgoing.has(candidate.previous.id)) continue;
+		incoming.set(candidate.next.id, candidate.previous);
+		outgoing.set(candidate.previous.id, candidate.next);
+		sequenceTrips.add(candidate.previous.id);
+		sequenceTrips.add(candidate.next.id);
+	}
+	const fallbackCandidates = candidates
+		.filter((candidate) => !candidate.sequenceMatch && !sequenceTrips.has(candidate.previous.id) && !sequenceTrips.has(candidate.next.id))
+		.sort(compareSimulationContinuations);
+	for (const candidate of fallbackCandidates) {
 		if (incoming.has(candidate.next.id) || outgoing.has(candidate.previous.id)) continue;
 		incoming.set(candidate.next.id, candidate.previous);
 		outgoing.set(candidate.previous.id, candidate.next);
