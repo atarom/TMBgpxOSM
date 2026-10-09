@@ -519,7 +519,7 @@ const simulationPseudoTurnOrderMotionScore = (ordered) => {
 	}
 	return score;
 };
-const assignSimulationPseudoTurnLabels = (pseudoTurns) => {
+const assignSimulationPseudoTurnLabelsPrevious = (pseudoTurns) => {
 	if (!pseudoTurns.length) return pseudoTurns;
 	const directions = [...new Set(pseudoTurns.flatMap((pseudoTurn) => pseudoTurn.trips.map((trip) => trip.direction)))].sort((a, b) => String(a).localeCompare(String(b), "ca", { numeric: true, sensitivity: "base" })),
 		directionOrder = new Map(directions.map((direction, index) => [direction, index])),
@@ -554,6 +554,132 @@ const assignSimulationPseudoTurnLabels = (pseudoTurns) => {
 	const origin = [...pseudoTurns].sort((a, b) => a.trips[0].startTime - b.trips[0].startTime || a.trips[0].endTime - b.trips[0].endTime || a.id - b.id)[0],
 		originIndex = ordered.indexOf(origin);
 	if (originIndex > 0) ordered.push(...ordered.splice(0, originIndex));
+	ordered.forEach((pseudoTurn, index) => {
+		pseudoTurn.label = String(index + 1).padStart(2, "0");
+	});
+	return pseudoTurns;
+};
+const simulationCirculationEvents = (pseudoTurns) => {
+	const byDirection = new Map();
+	for (const pseudoTurn of pseudoTurns)
+		for (const trip of pseudoTurn.trips) {
+			const stopId = trip.anchors[0]?.stopId;
+			if (!stopId || !finite(trip.startTime)) continue;
+			if (!byDirection.has(trip.direction)) byDirection.set(trip.direction, new Map());
+			const byStop = byDirection.get(trip.direction);
+			if (!byStop.has(stopId)) byStop.set(stopId, []);
+			byStop.get(stopId).push({ time: trip.startTime, pseudoTurn });
+		}
+	const result = [];
+	for (const byStop of byDirection.values()) {
+		const events = [...byStop.values()].sort((a, b) => b.length - a.length)[0];
+		if (!events || events.length < Math.max(5, pseudoTurns.length)) continue;
+		events.sort((a, b) => a.time - b.time || a.pseudoTurn.id - b.pseudoTurn.id);
+		result.push(events);
+	}
+	return result;
+};
+const simulationCirculationOrder = (pseudoTurns) => {
+	if (pseudoTurns.length < 4) return null;
+	const eventsByDirection = simulationCirculationEvents(pseudoTurns);
+	if (!eventsByDirection.length) return null;
+	const origin = [...pseudoTurns].sort((a, b) => a.trips[0].startTime - b.trips[0].startTime || a.trips[0].endTime - b.trips[0].endTime || a.id - b.id)[0];
+	let ordered = [],
+		bestTime = Infinity;
+	const maxSpan = 6 * 3600;
+	for (const events of eventsByDirection)
+		for (let i = 0; i < events.length; i++) {
+			if (events[i].pseudoTurn !== origin) continue;
+			const observed = [],
+				seen = new Set();
+			for (let j = i; j < events.length && events[j].time - events[i].time <= maxSpan; j++) {
+				const current = events[j].pseudoTurn;
+				if (seen.has(current)) break;
+				observed.push(current);
+				seen.add(current);
+			}
+			if (observed.length > ordered.length || (observed.length === ordered.length && events[i].time < bestTime)) {
+				ordered = observed;
+				bestTime = events[i].time;
+			}
+		}
+	if (ordered.length < Math.max(4, Math.ceil(pseudoTurns.length / 2))) return null;
+	while (ordered.length < pseudoTurns.length) {
+		const placed = new Set(ordered),
+			indexes = new Map(ordered.map((pseudoTurn, index) => [pseudoTurn, index]));
+		let best = null;
+		for (const pseudoTurn of pseudoTurns) {
+			if (placed.has(pseudoTurn)) continue;
+			const observations = [];
+			for (const events of eventsByDirection)
+				for (let i = 0; i < events.length; i++) {
+					if (events[i].pseudoTurn !== pseudoTurn) continue;
+					let previous = null,
+						next = null;
+					for (let j = i - 1; j >= 0 && events[i].time - events[j].time <= maxSpan; j--) {
+						if (events[j].pseudoTurn === pseudoTurn) break;
+						if (placed.has(events[j].pseudoTurn)) {
+							previous = events[j].pseudoTurn;
+							break;
+						}
+					}
+					for (let j = i + 1; j < events.length && events[j].time - events[i].time <= maxSpan; j++) {
+						if (events[j].pseudoTurn === pseudoTurn) break;
+						if (placed.has(events[j].pseudoTurn)) {
+							next = events[j].pseudoTurn;
+							break;
+						}
+					}
+					if (previous && next && previous !== next) observations.push([previous, next]);
+				}
+			if (observations.length < 2) continue;
+			const count = ordered.length;
+			for (let slot = 0; slot < count; slot++) {
+				let score = 0,
+					matched = 0,
+					proximity = 0;
+				for (const [previous, next] of observations) {
+					const distance = (indexes.get(next) - indexes.get(previous) + count) % count,
+						offset = (slot - indexes.get(previous) + count) % count;
+					if (distance && offset < distance) {
+						score++;
+						matched++;
+						proximity += (offset + 1) / distance;
+					} else score -= 2;
+				}
+				const candidate = { pseudoTurn, slot, score, matched, proximity, observations: observations.length };
+				if (!best || score > best.score || (score === best.score && (proximity > best.proximity || (proximity === best.proximity && (matched > best.matched || (matched === best.matched && pseudoTurn.id < best.pseudoTurn.id)))))) best = candidate;
+			}
+		}
+		if (!best || best.score <= 0 || best.matched < Math.ceil(best.observations * 0.75)) return null;
+		ordered.splice(best.slot + 1, 0, best.pseudoTurn);
+	}
+	const orderIndexes = new Map(ordered.map((pseudoTurn, index) => [pseudoTurn, index]));
+	let checked = 0,
+		consistent = 0;
+	for (const events of eventsByDirection)
+		for (let i = 0; i < events.length; i++) {
+			const seen = new Set();
+			let previousIndex = -1,
+				valid = true;
+			for (let j = i; j < events.length && events[j].time - events[i].time <= maxSpan; j++) {
+				const current = events[j].pseudoTurn;
+				if (seen.has(current)) break;
+				seen.add(current);
+				const relativeIndex = (orderIndexes.get(current) - orderIndexes.get(events[i].pseudoTurn) + ordered.length) % ordered.length;
+				if (relativeIndex <= previousIndex) valid = false;
+				previousIndex = relativeIndex;
+			}
+			if (seen.size < Math.min(5, ordered.length)) continue;
+			checked++;
+			if (valid) consistent++;
+		}
+	if (checked >= 4 && consistent / checked < 0.9) return null;
+	return ordered;
+};
+const assignSimulationPseudoTurnLabels = (pseudoTurns) => {
+	const ordered = simulationCirculationOrder(pseudoTurns);
+	if (!ordered) return assignSimulationPseudoTurnLabelsPrevious(pseudoTurns);
 	ordered.forEach((pseudoTurn, index) => {
 		pseudoTurn.label = String(index + 1).padStart(2, "0");
 	});
