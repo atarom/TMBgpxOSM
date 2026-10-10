@@ -1,5 +1,5 @@
 window.TmbSimulation = (() => {
-const model = {layer:null,route:null,date:"",availableDates:[],trips:[],pseudoTurns:[],features:new Map(),time:0,min:0,max:0,speed:30,playing:false,frame:0,lastFrame:0,open:false,prepared:false};
+const model = {layer:null,route:null,date:"",trips:[],pseudoTurns:[],features:new Map(),time:0,min:0,max:0,speed:30,playing:false,frame:0,lastFrame:0,open:false,prepared:false};
 const $ = (id) => document.getElementById(id);
 const finite = Number.isFinite;
 const { formatDateKey } = window.TmbGtfs;
@@ -41,9 +41,8 @@ const simulationBusPopupContent = (feature) => {
 		nextTrip = feature.get("nextTrip"),
 		root = el("div", "popup-body"),
 		code = el("span", "popup-code", pseudoTurn ? pseudoTurn.label : "—"),
-		body = el("div", "popup-copy"),
-		title = el("strong", "", `${feature.get("line") || ""} · pseudotorn ${pseudoTurn?.label || "—"}`);
-	body.append(title);
+		body = el("div", "popup-copy");
+	body.append(el("strong", "", `${feature.get("line") || ""} · pseudotorn ${pseudoTurn?.label || "—"}`));
 	if (status === "waiting" && nextTrip) {
 		body.append(
 			el("span", "popup-normal-label", "Espera estimada a terminal"),
@@ -79,19 +78,10 @@ const preferredSimulationDate = (route, requestedDate = "") => {
 	return dates.find((date) => !today || date > today) || dates.at(-1) || "";
 };
 const barcelonaNow = () => {
-	const parts = new Intl.DateTimeFormat("en-GB", {
-			timeZone: "Europe/Madrid",
-			year: "numeric",
-			month: "2-digit",
-			day: "2-digit",
-			hour: "2-digit",
-			minute: "2-digit",
-			second: "2-digit",
-			hourCycle: "h23"
-		})
-			.formatToParts(new Date())
-			.filter((part) => part.type !== "literal"),
-		values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+	const values = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+		timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit",
+		hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+	}).formatToParts(new Date()).map((part) => [part.type, part.value]));
 	return {
 		date: `${values.year}${values.month}${values.day}`,
 		seconds: Number(values.hour) * 3600 + Number(values.minute) * 60 + Number(values.second)
@@ -219,10 +209,6 @@ const simulationTripDistanceAtTime = (trip, time) => {
 	}
 	return anchors.at(-1).distance;
 };
-const simulationTripCoordinate = (trip, time) => {
-	const distance = simulationTripDistanceAtTime(trip, time);
-	return distance === null ? null : simulationCoordinateAtDistance(trip.path, distance);
-};
 const simulationAnchorDistance = (a, b) => {
 	const x = ol.proj.fromLonLat([a.lon, a.lat]),
 		y = ol.proj.fromLonLat([b.lon, b.lat]);
@@ -248,19 +234,33 @@ const simulationContinuationCandidate = (previous, next) => {
 	if (exactStop && !changesDirection && gap > 420) return null;
 	return { previous, next, exactStop, changesDirection, gap, distance, sequenceMatch };
 };
-const compareSimulationContinuations = (a, b) => {
-	if (a.next.startTime !== b.next.startTime) return a.next.startTime - b.next.startTime;
-	if (a.exactStop !== b.exactStop) return a.exactStop ? -1 : 1;
-	if (a.changesDirection !== b.changesDirection) return a.changesDirection ? -1 : 1;
-	if (a.gap !== b.gap) return a.gap - b.gap;
-	if (a.distance !== b.distance) return a.distance - b.distance;
-	return a.previous.id.localeCompare(b.previous.id);
-};
+const compareSimulationContinuations = (a, b) =>
+	a.next.startTime - b.next.startTime ||
+	Number(b.exactStop) - Number(a.exactStop) ||
+	Number(b.changesDirection) - Number(a.changesDirection) ||
+	a.gap - b.gap || a.distance - b.distance || a.previous.id.localeCompare(b.previous.id);
 const simulationContinuationScore = (candidate) =>
 	(candidate.exactStop ? 10000 : 0) +
 	(candidate.changesDirection ? 5000 : 0) +
-	Math.max(0, 1200 - candidate.gap) * 2 -
+	(1200 - candidate.gap) * 2 -
 	Math.round(candidate.distance);
+const assembleSimulationChains = (nodes, incoming, outgoing, byId) => {
+	const groups = [], visited = new Set();
+	for (const node of nodes) {
+		if (incoming.has(node.id) || visited.has(node.id)) continue;
+		const trips = [];
+		let current = node;
+		while (current && !visited.has(current.id)) {
+			trips.push(...(current.trips || [current]));
+			visited.add(current.id);
+			current = byId.get(outgoing.get(current.id)) || null;
+		}
+		groups.push(trips);
+	}
+	for (const node of nodes)
+		if (!visited.has(node.id)) groups.push([...(node.trips || [node])]);
+	return groups;
+};
 const buildSimulationSequenceChains = (orderedTrips, candidates) => {
 	const incoming = new Map(),
 		outgoing = new Map(),
@@ -270,30 +270,15 @@ const buildSimulationSequenceChains = (orderedTrips, candidates) => {
 		incoming.set(candidate.next.id, candidate.previous.id);
 		outgoing.set(candidate.previous.id, candidate.next.id);
 	}
-	const chains = [],
-		visited = new Set();
-	for (const trip of orderedTrips) {
-		if (incoming.has(trip.id) || visited.has(trip.id)) continue;
-		const chainTrips = [];
-		let current = trip;
-		while (current && !visited.has(current.id)) {
-			chainTrips.push(current);
-			visited.add(current.id);
-			current = tripById.get(outgoing.get(current.id)) || null;
-		}
-		chains.push({ id: chains.length, trips: chainTrips });
-	}
-	for (const trip of orderedTrips)
-		if (!visited.has(trip.id)) chains.push({ id: chains.length, trips: [trip] });
-	return chains;
+	return assembleSimulationChains(orderedTrips, incoming, outgoing, tripById)
+		.map((trips, id) => ({ id, trips }));
 };
 const simulationChainContinuation = (previousChain, nextChain) => {
 	const candidate = simulationContinuationCandidate(previousChain.trips.at(-1), nextChain.trips[0]);
 	if (!candidate || candidate.sequenceMatch) return null;
-	if (candidate.exactStop && candidate.changesDirection && candidate.gap <= 600) return candidate;
-	if (candidate.exactStop && !candidate.changesDirection && candidate.gap <= 180) return candidate;
-	if (!candidate.exactStop && candidate.changesDirection && candidate.gap <= 300 && candidate.distance <= 90) return candidate;
-	return null;
+	if (candidate.exactStop)
+		return candidate.gap <= (candidate.changesDirection ? 600 : 180) ? candidate : null;
+	return candidate.changesDirection && candidate.gap <= 300 && candidate.distance <= 90 ? candidate : null;
 };
 const matchSimulationChains = (chains) => {
 	const options = new Map();
@@ -344,42 +329,28 @@ const buildSimulationPseudoTurns = (trips) => {
 		}
 	const chains = buildSimulationSequenceChains(orderedTrips, candidates),
 		{ outgoing, incoming } = matchSimulationChains(chains),
-		chainById = new Map(chains.map((chain) => [chain.id, chain])),
-		pseudoTurns = [],
-		visited = new Set();
-	for (const chain of chains) {
-		if (incoming.has(chain.id) || visited.has(chain.id)) continue;
-		const chainTrips = [];
-		let current = chain;
-		while (current && !visited.has(current.id)) {
-			chainTrips.push(...current.trips);
-			visited.add(current.id);
-			current = chainById.get(outgoing.get(current.id)) || null;
-		}
-		pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: chainTrips });
-	}
-	for (const chain of chains)
-		if (!visited.has(chain.id)) pseudoTurns.push({ id: pseudoTurns.length + 1, label: "", trips: [...chain.trips] });
-	return pseudoTurns;
+		chainById = new Map(chains.map((chain) => [chain.id, chain]));
+	return assembleSimulationChains(chains, incoming, outgoing, chainById)
+		.map((trips, index) => ({ id: index + 1, label: "", trips }));
 };
 const simulationPseudoTurnStateAtTime = (pseudoTurn, time) => {
 	for (let i = 0; i < pseudoTurn.trips.length; i++) {
 		const trip = pseudoTurn.trips[i],
-			nextTrip = pseudoTurn.trips[i + 1];
-		if (time >= trip.startTime && time <= trip.endTime) {
-			const distance = simulationTripDistanceAtTime(trip, time),
-				coordinate = distance === null ? null : simulationCoordinateAtDistance(trip.path, distance);
-			return coordinate ? { status: "running", coordinate, distance, trip, nextTrip } : null;
-		}
-		if (nextTrip && time > trip.endTime && time < nextTrip.startTime) {
-			const distance = simulationTripDistanceAtTime(trip, trip.endTime),
-				coordinate = distance === null ? null : simulationCoordinateAtDistance(trip.path, distance);
-			return coordinate ? { status: "waiting", coordinate, distance, trip, nextTrip } : null;
-		}
+			nextTrip = pseudoTurn.trips[i + 1],
+			running = time >= trip.startTime && time <= trip.endTime,
+			waiting = nextTrip && time > trip.endTime && time < nextTrip.startTime;
+		if (!running && !waiting) continue;
+		const distance = simulationTripDistanceAtTime(trip, running ? time : trip.endTime),
+			coordinate = distance === null ? null : simulationCoordinateAtDistance(trip.path, distance);
+		return coordinate ? { status: running ? "running" : "waiting", coordinate, distance, trip, nextTrip } : null;
 	}
 	return null;
 };
 const simulationPseudoTurnBounds = (pseudoTurn) => [pseudoTurn.trips[0].startTime, pseudoTurn.trips.at(-1).endTime];
+const compareSimulationTurnStarts = (a, b) => a.trips[0].startTime - b.trips[0].startTime || a.trips[0].endTime - b.trips[0].endTime || a.id - b.id;
+const labelSimulationTurns = (ordered) => ordered.forEach((pseudoTurn, index) => {
+	pseudoTurn.label = String(index + 1).padStart(2, "0");
+});
 let simulationDiagnosticMinute = null;
 const ensureSimulationDiagnostics = () => {
 	let details = $("simulation-diagnostics");
@@ -389,12 +360,11 @@ const ensureSimulationDiagnostics = () => {
 	details = el("details", "simulation-diagnostics");
 	details.id = "simulation-diagnostics";
 	const summary = el("summary", "simulation-diagnostics-toggle"),
-		title = el("span", "", "Diagnòstic de pseudotorns"),
 		count = el("span", "simulation-diagnostics-summary", "—"),
 		list = el("div", "simulation-diagnostics-list");
 	count.id = "simulation-diagnostics-summary";
 	list.id = "simulation-diagnostics-list";
-	summary.append(title, count);
+	summary.append(el("span", "", "Diagnòstic de pseudotorns"), count);
 	details.append(summary, list);
 	legend.before(details);
 	details.addEventListener("toggle", () => {
@@ -455,27 +425,25 @@ const simulationPseudoTurnPhase = (pseudoTurn, time, directionOrder) => {
 		direction = directionOrder.get(pseudoTurnState.trip.direction) || 0;
 	return direction + progress;
 };
+const bestSimulationInterval = (values, evaluate, fallback) => {
+	let best = { count: -1, span: -1, time: fallback };
+	for (let i = 0; i < values.length - 1; i++) {
+		const start = values[i],
+			end = values[i + 1],
+			time = (start + end) / 2,
+			count = evaluate(time),
+			span = end - start;
+		if (count === null) continue;
+		if (count > best.count || (count === best.count && span > best.span)) best = { count, span, time };
+	}
+	return best;
+};
 const simulationPseudoTurnReference = (pseudoTurns) => {
 	const boundaries = [...new Set(pseudoTurns.flatMap((pseudoTurn) => simulationPseudoTurnBounds(pseudoTurn)))].sort((a, b) => a - b);
-	let bestCount = -1,
-		bestSpan = -1,
-		bestTime = boundaries[0] || 0;
-	for (let i = 0; i < boundaries.length - 1; i++) {
-		const start = boundaries[i],
-			end = boundaries[i + 1],
-			time = (start + end) / 2,
-			count = pseudoTurns.filter((pseudoTurn) => {
-				const [first, last] = simulationPseudoTurnBounds(pseudoTurn);
-				return time >= first && time <= last;
-			}).length,
-			span = end - start;
-		if (count > bestCount || (count === bestCount && span > bestSpan)) {
-			bestCount = count;
-			bestSpan = span;
-			bestTime = time;
-		}
-	}
-	return bestTime;
+	return bestSimulationInterval(boundaries, (time) => pseudoTurns.filter((pseudoTurn) => {
+		const [first, last] = simulationPseudoTurnBounds(pseudoTurn);
+		return time >= first && time <= last;
+	}).length, boundaries[0] || 0).time;
 };
 const simulationPseudoTurnInsertion = (pseudoTurn, ordered) => {
 	const [first, last] = simulationPseudoTurnBounds(pseudoTurn),
@@ -486,18 +454,10 @@ const simulationPseudoTurnInsertion = (pseudoTurn, ordered) => {
 		boundaries.add(Math.max(first, start));
 		boundaries.add(Math.min(last, end));
 	}
-	const values = [...boundaries].sort((a, b) => a - b);
-	let best = { count: -1, span: -1, time: (first + last) / 2 };
-	for (let i = 0; i < values.length - 1; i++) {
-		const start = values[i],
-			end = values[i + 1],
-			time = (start + end) / 2;
-		if (!simulationPseudoTurnStateAtTime(pseudoTurn, time)) continue;
-		const count = ordered.filter((current) => simulationPseudoTurnStateAtTime(current, time)).length,
-			span = end - start;
-		if (count > best.count || (count === best.count && span > best.span)) best = { count, span, time };
-	}
-	return best;
+	return bestSimulationInterval([...boundaries].sort((a, b) => a - b), (time) =>
+		simulationPseudoTurnStateAtTime(pseudoTurn, time)
+			? ordered.filter((current) => simulationPseudoTurnStateAtTime(current, time)).length
+			: null, (first + last) / 2);
 };
 const simulationPseudoTurnOrderMotionScore = (ordered) => {
 	let score = 0;
@@ -551,12 +511,9 @@ const assignSimulationPseudoTurnLabelsPrevious = (pseudoTurns) => {
 		remaining.splice(remaining.indexOf(selected), 1);
 	}
 	if (simulationPseudoTurnOrderMotionScore(ordered) > 0) ordered.reverse();
-	const origin = [...pseudoTurns].sort((a, b) => a.trips[0].startTime - b.trips[0].startTime || a.trips[0].endTime - b.trips[0].endTime || a.id - b.id)[0],
-		originIndex = ordered.indexOf(origin);
+	const originIndex = ordered.indexOf([...pseudoTurns].sort(compareSimulationTurnStarts)[0]);
 	if (originIndex > 0) ordered.push(...ordered.splice(0, originIndex));
-	ordered.forEach((pseudoTurn, index) => {
-		pseudoTurn.label = String(index + 1).padStart(2, "0");
-	});
+	labelSimulationTurns(ordered);
 	return pseudoTurns;
 };
 const simulationCirculationEvents = (pseudoTurns) => {
@@ -579,11 +536,19 @@ const simulationCirculationEvents = (pseudoTurns) => {
 	}
 	return result;
 };
+const findSimulationNeighbor = (events, index, placed, maxSpan, step) => {
+	for (let j = index + step; j >= 0 && j < events.length && Math.abs(events[j].time - events[index].time) <= maxSpan; j += step) {
+		const neighbor = events[j].pseudoTurn;
+		if (neighbor === events[index].pseudoTurn) break;
+		if (placed.has(neighbor)) return neighbor;
+	}
+	return null;
+};
 const simulationCirculationOrder = (pseudoTurns) => {
 	if (pseudoTurns.length < 4) return null;
 	const eventsByDirection = simulationCirculationEvents(pseudoTurns);
 	if (!eventsByDirection.length) return null;
-	const origin = [...pseudoTurns].sort((a, b) => a.trips[0].startTime - b.trips[0].startTime || a.trips[0].endTime - b.trips[0].endTime || a.id - b.id)[0];
+	const origin = [...pseudoTurns].sort(compareSimulationTurnStarts)[0];
 	let ordered = [],
 		bestTime = Infinity;
 	const maxSpan = 6 * 3600;
@@ -614,22 +579,8 @@ const simulationCirculationOrder = (pseudoTurns) => {
 			for (const events of eventsByDirection)
 				for (let i = 0; i < events.length; i++) {
 					if (events[i].pseudoTurn !== pseudoTurn) continue;
-					let previous = null,
-						next = null;
-					for (let j = i - 1; j >= 0 && events[i].time - events[j].time <= maxSpan; j--) {
-						if (events[j].pseudoTurn === pseudoTurn) break;
-						if (placed.has(events[j].pseudoTurn)) {
-							previous = events[j].pseudoTurn;
-							break;
-						}
-					}
-					for (let j = i + 1; j < events.length && events[j].time - events[i].time <= maxSpan; j++) {
-						if (events[j].pseudoTurn === pseudoTurn) break;
-						if (placed.has(events[j].pseudoTurn)) {
-							next = events[j].pseudoTurn;
-							break;
-						}
-					}
+					const previous = findSimulationNeighbor(events, i, placed, maxSpan, -1),
+						next = findSimulationNeighbor(events, i, placed, maxSpan, 1);
 					if (previous && next && previous !== next) observations.push([previous, next]);
 				}
 			if (observations.length < 2) continue;
@@ -680,9 +631,7 @@ const simulationCirculationOrder = (pseudoTurns) => {
 const assignSimulationPseudoTurnLabels = (pseudoTurns) => {
 	const ordered = simulationCirculationOrder(pseudoTurns);
 	if (!ordered) return assignSimulationPseudoTurnLabelsPrevious(pseudoTurns);
-	ordered.forEach((pseudoTurn, index) => {
-		pseudoTurn.label = String(index + 1).padStart(2, "0");
-	});
+	labelSimulationTurns(ordered);
 	return pseudoTurns;
 };
 const renderSimulationVehicles = () => {
@@ -777,7 +726,6 @@ const setupSimulation = (route, requestedDate = "") => {
 	simulation.features.clear();
 	simulation.route = route;
 	simulation.date = selectedDate;
-	simulation.availableDates = route.simulationDates || [];
 	populateSimulationDates(route, selectedDate);
 	simulation.trips = (route.simulationTrips || [])
 		.filter((trip) => trip.serviceDates?.has(selectedDate))
@@ -843,7 +791,6 @@ const selectRoute = (route) => {
 	setSimulationPlaying(false);
 	model.route = route;
 	model.date = "";
-	model.availableDates = [];
 	model.trips = [];
 	model.pseudoTurns = [];
 	model.time = 0;
