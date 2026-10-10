@@ -766,7 +766,8 @@ const setSimulationPlaying = (playing) => {
 };
 const setupSimulation = (route, requestedDate = "") => {
 	setSimulationPlaying(false);
-	const target = requestedDate ? { date: preferredSimulationDate(route, requestedDate), time: null } : currentSimulationTarget(route),
+	const now = requestedDate ? barcelonaNow() : null,
+		target = requestedDate ? { date: preferredSimulationDate(route, requestedDate), time: requestedDate === now.date ? now.seconds : null } : currentSimulationTarget(route),
 		simulation = model,
 		range = $("simulation-range"),
 		play = $("simulation-play"),
@@ -867,6 +868,13 @@ const init = (options = {}) => {
 	$("simulation-play")?.addEventListener("click", () => setSimulationPlaying(!model.playing));
 	$("simulation-service-date")?.addEventListener("change", (event) => {
 		if (model.route && model.open) setupSimulation(model.route, event.target.value);
+	});
+	$("simulation-service-date")?.addEventListener("pointerdown", (event) => {
+		const now = barcelonaNow();
+		if (model.route && model.open && model.date === now.date && event.currentTarget.value === now.date) {
+			setSimulationPlaying(false);
+			setSimulationTime(now.seconds);
+		}
 	});
 	$("simulation-range")?.addEventListener("input", (event) => {
 		model.lastFrame = performance.now();
