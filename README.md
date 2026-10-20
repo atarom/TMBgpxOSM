@@ -21,7 +21,6 @@ Consulta les línies i sentits de TMB, visualitza recorreguts actius, futurs i p
 - [GTFS TMB](https://developer.tmb.cat/data/gtfs) — dades GTFS oficials de TMB.
 - [OpenLayers](https://openlayers.org/) — visualització del mapa i de les geometries.
 - [JSZip](https://stuk.github.io/jszip/) — lectura del fitxer GTFS.
-- [T-mobilitat Open Data](https://t-mobilitat.atm.cat/web/t-mobilitat/dades-obertes) — font del GTFS oficial.
 - [Overpass API](https://overpass-api.de/) — cerca de relacions d’OpenStreetMap.
 - [OpenStreetMap API](https://wiki.openstreetmap.org/wiki/API_v0.6) — lectura de relacions completes per a les comprovacions QA.
 - [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) — dades disponibles sota llicència ODbL.
