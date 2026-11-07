@@ -5,8 +5,8 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: "17 3 * * *"
-    timezone: "Europe/Madrid"
+    - cron: "16 3 * * *"
+      timezone: "Europe/Madrid"
 permissions:
   contents: read
   actions: read
