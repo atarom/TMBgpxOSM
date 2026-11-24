@@ -26,7 +26,100 @@ jobs:
         run: |
           mkdir _site
           cp index.html style.css simulation-tools.css script.js simulation.js simulation-tools.js gpx.js gtfs.js osm-qa.js gtfs-cache.js gtfs-processed-cache.js favicon.ico _site/
-          curl -L --fail --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 "https://t-mobilitat.cat/opendata/static/download/" -o _site/gtfs.zip
+          python3 - <<'PY'
+          import csv
+          import datetime
+          import io
+          import pathlib
+          import shutil
+          import subprocess
+          import zipfile
+          from urllib.parse import urlsplit
+          target = pathlib.Path('_site/gtfs.zip')
+          temp = pathlib.Path('_gtfs_download.zip')
+          required = {'agency.txt', 'routes.txt', 'stops.txt', 'trips.txt', 'shapes.txt', 'stop_times.txt'}
+          today = datetime.date.today().strftime('%Y%m%d')
+          def download(url, path):
+              subprocess.run(['curl', '-L', '--fail', '--silent', '--show-error', '--retry', '2', '--retry-all-errors', '--connect-timeout', '20', '--max-time', '180', url, '-o', str(path)], check=True)
+          def rows(z, name):
+              with z.open(name) as f:
+                  yield from csv.DictReader(io.TextIOWrapper(f, encoding='utf-8-sig', newline=''))
+          def validate(z, direct=False):
+              names = set(z.namelist())
+              if not required <= names or not names.intersection({'calendar.txt', 'calendar_dates.txt'}) or z.testzip() is not None:
+                  raise ValueError('GTFS incomplet o ZIP corrupte')
+              agencies = list(rows(z, 'agency.txt'))
+              if direct:
+                  if len(agencies) != 1 or agencies[0]['agency_name'].strip().upper() != 'TMB':
+                      raise ValueError('Operador alternatiu incorrecte')
+                  feed = next(rows(z, 'feed_info.txt'))
+                  start, end = feed['feed_start_date'], feed['feed_end_date']
+                  if not '20261123' <= start <= today <= end:
+                      raise ValueError(f'GTFS alternatiu antic o fora de vigència: {start}–{end}')
+                  if not any(r['route_type'] == '3' for r in rows(z, 'routes.txt')):
+                      raise ValueError('No hi ha línies de bus TMB')
+                  print(f'GTFS TMB: {start}–{end}, versió {feed.get("feed_version", "")}', flush=True)
+              elif not any(r.get('agency_id') == 'TMB_' and r['route_type'] == '3' for r in rows(z, 'routes.txt')):
+                  raise ValueError('No hi ha línies de bus TMB a ATM')
+          def normalize(z):
+              identifiers = {'route_id', 'trip_id', 'shape_id', 'service_id', 'stop_id', 'parent_station', 'block_id', 'zone_id', 'from_stop_id', 'to_stop_id', 'from_route_id', 'to_route_id', 'from_trip_id', 'to_trip_id', 'pathway_id', 'level_id'}
+              with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as out:
+                  for name in z.namelist():
+                      if not name.endswith('.txt'):
+                          continue
+                      with z.open(name) as source, out.open(name, 'w') as dest:
+                          reader = csv.DictReader(io.TextIOWrapper(source, encoding='utf-8-sig', newline=''))
+                          fields = list(reader.fieldnames)
+                          if name in {'agency.txt', 'routes.txt'} and 'agency_id' not in fields:
+                              fields.insert(0, 'agency_id')
+                          with io.TextIOWrapper(dest, encoding='utf-8', newline='') as stream:
+                              writer = csv.DictWriter(stream, fieldnames=fields, lineterminator='\n')
+                              writer.writeheader()
+                              for row in reader:
+                                  for key in identifiers.intersection(row):
+                                      if row[key]:
+                                          row[key] = 'TMB_' + row[key]
+                                  if name in {'agency.txt', 'routes.txt'}:
+                                      row['agency_id'] = 'TMB_'
+                                  writer.writerow(row)
+          try:
+              download('https://t-mobilitat.cat/opendata/static/download/', temp)
+              with zipfile.ZipFile(temp) as z:
+                  validate(z)
+              shutil.move(temp, target)
+              print('FONT GTFS: ATM / T-mobilitat', flush=True)
+          except Exception as error:
+              print(f'::warning::ATM no disponible: {error}')
+              urls = []
+              try:
+                  download('https://files.mobilitydatabase.org/feeds_v2.csv', '_gtfs_catalog.csv')
+                  with open('_gtfs_catalog.csv', encoding='utf-8-sig', newline='') as f:
+                      for row in csv.DictReader(f):
+                          producer = row.get('provider', '').lower()
+                          url = row.get('urls.latest') or row.get('latest.url') or ''
+                          host = urlsplit(url).hostname
+                          if row.get('data_type') == 'gtfs' and row.get('status') == 'active' and ('transports metropolitans de barcelona' in producer or row.get('id') in {'mdb-2359', 'mdb-3232'}) and host in {'files.mobilitydatabase.org', 'storage.googleapis.com'}:
+                              urls.append(url)
+              except Exception as error:
+                  print(f'::warning::Catàleg Mobility Database no disponible: {error}')
+              if today <= '20261130':
+                  urls.append('https://files.mobilitydatabase.org/mdb-2359/mdb-2359-202611240107/mdb-2359-202611240107.zip')
+              for url in dict.fromkeys(urls):
+                  try:
+                      download(url, temp)
+                      with zipfile.ZipFile(temp) as z:
+                          validate(z, direct=True)
+                          normalize(z)
+                      with zipfile.ZipFile(target) as z:
+                          validate(z)
+                      print(f'FONT GTFS: Mobility Database — {url}', flush=True)
+                      break
+                  except Exception as error:
+                      target.unlink(missing_ok=True)
+                      print(f'::warning::Font alternativa no disponible: {error}')
+              else:
+                  raise SystemExit('No hi ha cap GTFS vàlid; es manté el desplegament anterior')
+          PY
           unzip -t _site/gtfs.zip
           rm -rf _gtfs_hash
           mkdir _gtfs_hash
