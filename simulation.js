@@ -394,8 +394,14 @@ const renderSimulationDiagnostics = (force = false) => {
 	simulationDiagnosticMinute = minute;
 	const list = $("simulation-diagnostics-list");
 	if (!list) return;
+	const duration = Math.max(1, model.max - model.min),
+		percent = (time) => Math.max(0, Math.min(100, (time - model.min) / duration * 100)),
+		axis = el("div", "simulation-diagnostic-axis"),
+		axisLabels = el("div", "simulation-diagnostic-axis-labels");
+	axisLabels.append(el("span", "", formatSimulationTime(model.min)), el("span", "", formatSimulationTime(model.max)));
+	axis.append(axisLabels);
 	const rows = [...model.pseudoTurns]
-		.sort((a, b) => Number(a.label) - Number(b.label))
+		.sort(compareSimulationTurnStarts)
 		.map((pseudoTurn) => {
 			const [start, end] = simulationPseudoTurnBounds(pseudoTurn),
 				[state, stateText] = simulationDiagnosticState(pseudoTurn, model.time),
@@ -403,12 +409,18 @@ const renderSimulationDiagnostics = (force = false) => {
 				number = el("strong", "simulation-diagnostic-number", pseudoTurn.label),
 				times = el("span", "simulation-diagnostic-times", `${formatSimulationTime(start)}–${formatSimulationTime(end)}`),
 				status = el("span", `simulation-diagnostic-state simulation-diagnostic-state-${state}`, stateText),
-				trips = el("span", "simulation-diagnostic-trips", `${pseudoTurn.trips.length} exp.`);
+				trips = el("span", "simulation-diagnostic-trips", `${pseudoTurn.trips.length} exp.`),
+				timeline = el("span", "simulation-diagnostic-timeline"),
+				bar = el("span", "simulation-diagnostic-bar");
+			bar.style.left = `${percent(start)}%`;
+			bar.style.width = `${Math.max(0, percent(end) - percent(start))}%`;
+			timeline.setAttribute("aria-hidden", "true");
+			timeline.append(bar);
 			row.dataset.state = state;
-			row.append(number, times, status, trips);
+			row.append(number, times, status, timeline, trips);
 			return row;
 		});
-	list.replaceChildren(...rows);
+	list.replaceChildren(...(rows.length ? [axis, ...rows] : []));
 };
 const clearSimulationDiagnostics = () => {
 	simulationDiagnosticMinute = null;
