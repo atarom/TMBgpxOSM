@@ -43,6 +43,7 @@ const simulationBusPopupContent = (feature) => {
 		code = el("span", "popup-code", pseudoTurn ? pseudoTurn.label : "—"),
 		body = el("div", "popup-copy");
 	body.append(el("strong", "", `${feature.get("line") || ""} · pseudotorn ${pseudoTurn?.label || "—"}`));
+	if (pseudoTurn) body.append(el("span", "popup-normal-label", `Rot. ${pseudoTurn.rotationLabel || pseudoTurn.label} · GTFS ${pseudoTurn.sequenceLabel || "—"}`));
 	if (status === "waiting" && nextTrip) {
 		body.append(
 			el("span", "popup-normal-label", "Espera estimada a terminal"),
@@ -351,6 +352,87 @@ const compareSimulationTurnStarts = (a, b) => a.trips[0].startTime - b.trips[0].
 const labelSimulationTurns = (ordered) => ordered.forEach((pseudoTurn, index) => {
 	pseudoTurn.label = String(index + 1).padStart(2, "0");
 });
+const simulationNumbering = {method: "rotation", omitted: []};
+const simulationSequenceOrder = (pseudoTurns) => {
+	const blocks = pseudoTurns.map((pseudoTurn) => {
+		const sequences = pseudoTurn.trips.map(simulationTripSequence);
+		if (!sequences.length || sequences.some((sequence) => !sequence || !Number.isSafeInteger(sequence.value))) return null;
+		return {pseudoTurn, key: sequences[0].key, min: Math.min(...sequences.map((sequence) => sequence.value)), valid: sequences.every((sequence) => sequence.key === sequences[0].key)};
+	});
+	if (!blocks.length || blocks.some((block) => !block || !block.valid || block.key !== blocks[0]?.key) || new Set(blocks.map((block) => block.min)).size !== blocks.length) return null;
+	return blocks.sort((a, b) => a.min - b.min).map((block) => block.pseudoTurn);
+};
+const simulationExperimentalLabels = (ordered, omitted) => {
+	if (!ordered) return null;
+	const excluded = new Set(omitted), total = ordered.length + excluded.size;
+	if (omitted.some((value) => !Number.isInteger(value) || value < 1 || value > total)) return null;
+	const labels = Array.from({length: total}, (_, index) => index + 1).filter((value) => !excluded.has(value)).map(String).sort();
+	return new Map(ordered.map((pseudoTurn, index) => [pseudoTurn.id, labels[index].padStart(2, "0")]));
+};
+const applySimulationNumbering = () => {
+	const turns = model.pseudoTurns,
+		ordered = simulationSequenceOrder(turns),
+		labels = simulationExperimentalLabels(ordered, simulationNumbering.omitted),
+		method = $("simulation-numbering-method"),
+		omitted = $("simulation-numbering-omitted"),
+		message = $("simulation-numbering-message"),
+		experimental = simulationNumbering.method === "sequence";
+	for (const turn of turns) {
+		turn.rotationLabel ||= turn.label;
+		turn.sequenceLabel = labels?.get(turn.id) || "";
+		turn.label = experimental && turn.sequenceLabel ? turn.sequenceLabel : turn.rotationLabel;
+	}
+	if (method) method.value = simulationNumbering.method;
+	if (omitted) {
+		omitted.disabled = !experimental || !ordered;
+		omitted.setAttribute("aria-invalid", String(!!ordered && !labels));
+	}
+	if (message) message.textContent = !turns.length ? "Sense pseudotorns per comparar." : !ordered ? "Seqüència GTFS no comparable; es manté la rotació." : !labels ? "Esborra els números absents o introdueix-ne de vàlids; es manté la rotació." : experimental ? "Hipòtesi experimental: blocs ordenats per trip_id i números en ordre lexicogràfic. No són torns oficials." : "Numeració original per rotació estimada.";
+	simulationDiagnosticMinute = null;
+};
+const ensureSimulationNumbering = (details) => {
+	const control = el("div", "simulation-numbering"),
+		label = el("label", "", "Mètode de numeració dels pseudotorns"),
+		method = el("select"),
+		rotation = el("option", "", "Rotació estimada"),
+		sequence = el("option", "", "Seqüència GTFS (experimental)"),
+		gapLabel = el("label", "", "Números absents (hipòtesi opcional)"),
+		omitted = el("input"),
+		message = el("span", "simulation-numbering-message");
+	method.id = "simulation-numbering-method";
+	label.htmlFor = method.id;
+	rotation.value = "rotation";
+	sequence.value = "sequence";
+	method.append(rotation, sequence);
+	method.setAttribute("aria-describedby", "simulation-numbering-message");
+	omitted.id = "simulation-numbering-omitted";
+	gapLabel.htmlFor = omitted.id;
+	omitted.type = "text";
+	omitted.placeholder = "Ex.: 17, 24";
+	omitted.maxLength = 100;
+	omitted.disabled = true;
+	omitted.setAttribute("aria-describedby", "simulation-numbering-message");
+	message.id = "simulation-numbering-message";
+	message.setAttribute("aria-live", "polite");
+	control.append(label, method, gapLabel, omitted, message);
+	details.before(control);
+	const update = () => {
+		applySimulationNumbering();
+		closePopup();
+		renderSimulationVehicles();
+		renderSimulationDiagnostics(true);
+	};
+	method.addEventListener("change", () => {
+		simulationNumbering.method = method.value;
+		update();
+	});
+	omitted.addEventListener("input", () => {
+		const value = omitted.value.trim();
+		simulationNumbering.omitted = !value ? [] : /^[0-9]+(?:\s*,\s*[0-9]+)*$/.test(value) ? [...new Set(value.split(",").map(Number))] : [NaN];
+		update();
+	});
+	applySimulationNumbering();
+};
 let simulationDiagnosticMinute = null;
 const ensureSimulationDiagnostics = () => {
 	let details = $("simulation-diagnostics");
@@ -367,6 +449,7 @@ const ensureSimulationDiagnostics = () => {
 	summary.append(el("span", "", "Diagnòstic de pseudotorns"), count);
 	details.append(summary, list);
 	legend.before(details);
+	ensureSimulationNumbering(details);
 	details.addEventListener("toggle", () => {
 		if (!details.open) return;
 		simulationDiagnosticMinute = null;
@@ -417,7 +500,8 @@ const renderSimulationDiagnostics = (force = false) => {
 			timeline.setAttribute("aria-hidden", "true");
 			timeline.append(bar);
 			row.dataset.state = state;
-			row.append(number, times, status, timeline, trips);
+			const identifiers = el("span", "simulation-diagnostic-identifiers", `Rot. ${pseudoTurn.rotationLabel || pseudoTurn.label} · GTFS ${pseudoTurn.sequenceLabel || "—"} · trip_id: ${pseudoTurn.trips[0].id} → ${pseudoTurn.trips.at(-1).id}`);
+			row.append(number, times, status, timeline, trips, identifiers);
 			return row;
 		});
 	list.replaceChildren(...(rows.length ? [axis, ...rows] : []));
@@ -744,6 +828,10 @@ const setupSimulation = (route, requestedDate = "") => {
 		.map((trip) => prepareSimulationTrip(trip, shapeById.get(trip.shapeId)))
 		.filter(Boolean);
 	simulation.pseudoTurns = assignSimulationPseudoTurnLabels(buildSimulationPseudoTurns(simulation.trips));
+	simulationNumbering.omitted = [];
+	const omitted = $("simulation-numbering-omitted");
+	if (omitted) omitted.value = "";
+	applySimulationNumbering();
 	simulation.prepared = true;
 	if (!simulation.trips.length) {
 		$("simulation-date").textContent = selectedDate ? `Servei programat · ${formatDateKey(selectedDate)}` : "Servei programat";
@@ -805,6 +893,10 @@ const selectRoute = (route) => {
 	model.date = "";
 	model.trips = [];
 	model.pseudoTurns = [];
+	simulationNumbering.omitted = [];
+	const omitted = $("simulation-numbering-omitted");
+	if (omitted) omitted.value = "";
+	applySimulationNumbering();
 	model.time = 0;
 	model.min = 0;
 	model.max = 0;

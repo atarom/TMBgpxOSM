@@ -48,3 +48,18 @@
 	.simulation-diagnostic-trips { grid-column: 3; grid-row: 1 / 3; }
 	.simulation-diagnostic-timeline { grid-row: 3; }
 }
+.simulation-numbering { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); align-items: center; gap: 6px 10px; padding: 8px 10px; border-top: 1px solid var(--line); background: #141416; font-size: .7rem; }
+.simulation-numbering label { color: #d7d7da; font-weight: 800; }
+.simulation-numbering select, .simulation-numbering input { width: 100%; min-width: 0; min-height: 36px; box-sizing: border-box; padding: 4px 6px; border: 1px solid #55555a; border-radius: 0; background: #1b1b1e; color: #fff; font: inherit; }
+.simulation-numbering select:focus-visible, .simulation-numbering input:focus-visible { outline: 2px solid #78c4ff; outline-offset: 1px; }
+.simulation-numbering input:disabled { opacity: .5; }
+.simulation-numbering input[aria-invalid="true"] { border-color: #ff5a63; }
+.simulation-numbering-message { grid-column: 1 / -1; color: var(--muted); line-height: 1.35; }
+.simulation-diagnostic-identifiers { grid-column: 2 / -1; color: var(--muted); font-size: .63rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+	.simulation-numbering { grid-template-columns: minmax(0,1fr); }
+	.simulation-numbering select, .simulation-numbering input { min-height: 44px; }
+}
+@container (max-width: 480px) {
+	.simulation-diagnostic-identifiers { grid-column: 1 / -1; grid-row: 4; }
+}
