@@ -401,7 +401,7 @@ const renderSimulationDiagnostics = (force = false) => {
 	axisLabels.append(el("span", "", formatSimulationTime(model.min)), el("span", "", formatSimulationTime(model.max)));
 	axis.append(axisLabels);
 	const rows = [...model.pseudoTurns]
-		.sort(compareSimulationTurnStarts)
+		.sort((a, b) => Number(a.label) - Number(b.label))
 		.map((pseudoTurn) => {
 			const [start, end] = simulationPseudoTurnBounds(pseudoTurn),
 				[state, stateText] = simulationDiagnosticState(pseudoTurn, model.time),
